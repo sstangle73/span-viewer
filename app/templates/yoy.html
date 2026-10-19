@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+
+{% block title %}YoY monthly kWh — span-viewer{% endblock %}
+
+{% block content %}
+<section class="controls">
+  <form>
+    <label for="circuit">Circuit</label>
+    <select
+        id="circuit"
+        name="circuit"
+        hx-get="/yoy/chart"
+        hx-target="#chart-block"
+        hx-trigger="change"
+        hx-swap="innerHTML">
+      {% for c in circuits %}
+        <option value="{{ c.id if c.id is defined else c.space_id }}"
+                {% if (c.id if c.id is defined else c.space_id) == selected_circuit %}selected{% endif %}>
+          {{ c.name }}{% if c.total_kwh %} — {{ '%.0f'|format(c.total_kwh) }} kWh total{% endif %}
+        </option>
+      {% endfor %}
+    </select>
+  </form>
+
+  <form class="rate-form">
+    <label for="rate">Rate ($/kWh)</label>
+    <input type="number" id="rate" step="0.001" min="0" value="{{ '%.3f'|format(rates.all_in_per_kwh) if rates else '' }}" placeholder="optional">
+  </form>
+</section>
+
+<section id="chart-block">
+  {% include "yoy_chart.html" %}
+</section>
+
+<section class="cost">
+  <h2>kWh per year<span id="rate-title"></span></h2>
+  <p style="font-size: 0.8rem; color: var(--muted); margin: 0 0 0.5rem;">
+    Type a rate above to price each year's kWh at one flat $/kWh{% if rates %} (it starts at the
+    configured RATE_IMPORT_PER_KWH){% endif %}. A real bill also has fixed charges, tiers and
+    export credits, which the panel can't see.
+  </p>
+  <table id="cost-table">
+    <thead>
+      <tr>
+        <th>Year</th>
+        <th class="num">kWh</th>
+        <th class="num" id="cost-head">$ @ rate</th>
+      </tr>
+    </thead>
+    <tbody><!-- filled by JS, recomputes on rate change --></tbody>
+  </table>
+</section>
+
+<script>
+  // Recompute the per-year table whenever the chart data refreshes or the
+  // rate changes. No rate: kWh only.
+  function recomputeCost() {
+    const rate = parseFloat(document.getElementById('rate').value) || 0;
+    document.getElementById('rate-title').textContent =
+      rate > 0 ? ` and cost at $${rate.toFixed(3)}/kWh` : '';
+    document.getElementById('cost-head').style.display = rate > 0 ? '' : 'none';
+
+    const monthsRaw = document.getElementById('chart-data')?.textContent;
+    if (!monthsRaw) return;
+    const months = JSON.parse(monthsRaw);
+
+    const byYear = new Map();
+    for (const m of months) {
+      byYear.set(m.year, (byYear.get(m.year) || 0) + m.kwh);
+    }
+    const years = [...byYear.keys()].sort();
+
+    const tbody = document.querySelector('#cost-table tbody');
+    tbody.innerHTML = '';
+    for (const y of years) {
+      const kwh = byYear.get(y);
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${y}</td>
+        <td class="num">${kwh.toFixed(0)}</td>
+        ${rate > 0 ? `<td class="num">$${(kwh * rate).toFixed(2)}</td>` : ''}
+      `;
+      tbody.appendChild(tr);
+    }
+  }
+
+  document.getElementById('rate').addEventListener('input', recomputeCost);
+  // Re-run after every HTMX swap into #chart-block.
+  document.body.addEventListener('htmx:afterSwap', (e) => {
+    if (e.detail.target.id === 'chart-block') {
+      renderChart();
+      recomputeCost();
+    }
+  });
+  // Initial render once DOM is ready.
+  window.addEventListener('DOMContentLoaded', () => {
+    if (typeof echarts !== 'undefined') {
+      renderChart();
+    } else {
+      // ECharts loads with defer — wait for it.
+      window.addEventListener('load', () => { renderChart(); recomputeCost(); });
+    }
+    recomputeCost();
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,19 @@
+[Unit]
+Description=span-viewer 10-min cloud ingest (one-shot)
+After=network-online.target postgresql.service
+Wants=network-online.target
+# If the previous fire is still running, skip — don't queue up overlapping runs.
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/span-viewer
+Environment=PYTHONUNBUFFERED=1
+# Settings (TZ, DATABASE_URL, SPAN_HOST, MQTT_URL ...): see config.example.toml.
+EnvironmentFile=-/etc/span-viewer/span-viewer.env
+ExecStart=/opt/span-viewer/.venv/bin/python -m ingester.ongoing
+StandardOutput=journal
+StandardError=journal
+# Cap any pathological run.
+TimeoutStartSec=120s

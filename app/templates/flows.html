@@ -1,0 +1,180 @@
+{% extends "base.html" %}
+
+{% block title %}Energy flows — span-viewer{% endblock %}
+
+{% block content %}
+<section class="pickers">
+  {% for w, label in [('30d','Last 30 days'), ('90d','Last 90 days'), ('12mo','Last 12 months'), ('lifetime','Lifetime')] %}
+    <a class="pill {% if window == w %}active{% endif %}" href="/flows?window={{ w }}#sankey">{{ label }}</a>
+  {% endfor %}
+</section>
+
+<section class="panel" id="sankey">
+  <h2>Energy flows — {{ window }}</h2>
+  <div id="sankey-chart" style="width: 100%; height: 460px;"></div>
+  <p style="font-size: 0.8rem; color: var(--muted); margin: 0.5rem 0 0;">
+    Where every kWh started and ended over the chosen window. Sources on the left
+    (▲ solar / ● grid import). Sinks on the right (house consumption / grid export).
+    The yellow-orange path is solar that stayed on-site. The pink-magenta path is
+    solar exported back to grid. Bar widths are proportional to kWh.
+  </p>
+</section>
+
+<section class="panel" id="mismatch">
+  <h2>Time-of-day mismatch — solar production vs house consumption</h2>
+  <div id="mismatch-chart" style="width: 100%; height: 420px;"></div>
+  <p style="font-size: 0.8rem; color: var(--muted); margin: 0.5rem 0 0;">
+    Average kWh per hour-of-day from the last ~12 weeks (where 10-min/hourly data
+    exists). ▲ orange = solar produced. ● blue = house consumed.
+    Wherever consumption sits ABOVE the solar curve, you imported from grid;
+    wherever solar sits above consumption, you exported.
+    The gap quantifies how much load-shifting (to midday) would offset imports.
+  </p>
+</section>
+
+<section class="panel" id="phantom">
+  <h2>Phantom load tracker — daily minimum power</h2>
+  <div id="phantom-chart" style="width: 100%; height: 320px;"></div>
+  <p style="font-size: 0.8rem; color: var(--muted); margin: 0.5rem 0 0;">
+    The lowest single 10-min bucket each day, expressed in kW. Captures the
+    "what's still running when nothing's running" baseline. A drifting trend
+    here means appliances are creeping into always-on mode; a sudden step
+    means something started running 24/7.
+  </p>
+</section>
+
+<script type="application/json" id="flows-data">{{ flows_json | safe }}</script>
+<script type="application/json" id="mismatch-data">{{ mismatch_json | safe }}</script>
+<script type="application/json" id="phantom-data">{{ phantom_json | safe }}</script>
+
+<script>
+  // Series colors used across multiple charts on this page.
+  const SOLAR = '#f59e0b', GRID = '#3b82f6', PINK = '#ec4899', YELLOW = '#facc15';
+
+  window.addEventListener('load', () => {
+    if (typeof echarts === 'undefined') return;
+
+    // ---- Sankey ----
+    {
+      const f = JSON.parse(document.getElementById('flows-data').textContent);
+      const fmt = (v) => v.toFixed(0) + ' kWh';
+      const chart = echarts.init(document.getElementById('sankey-chart'), 'span-dark');
+      // Desktop reserves 220 px on the right for "House consumption" /
+      // "◆ Grid export" labels next to the rightmost nodes. On a phone
+      // that gutter would consume the entire viewport — shrink it and
+      // step down the label fontSize so the diagram body has room to
+      // breathe. baseOption + media re-evaluates on resize.
+      chart.setOption({
+        baseOption: {
+          tooltip: {
+            trigger: 'item',
+            formatter: (p) => p.dataType === 'edge'
+              ? `${p.data.source} → ${p.data.target}<br/><strong>${fmt(p.data.value)}</strong>`
+              : `<strong>${p.name}</strong>`,
+          },
+          series: [{
+            type: 'sankey',
+            left: 60, right: 220, top: 30, bottom: 30,
+            nodeAlign: 'left',
+            lineStyle: { curveness: 0.5, opacity: 0.4 },
+            label: { color: '#e2e8f0', formatter: (p) => `${p.name}` },
+            data: [
+              { name: '▲ Solar produced', itemStyle: { color: SOLAR } },
+              { name: '● Grid import',    itemStyle: { color: GRID  } },
+              { name: 'House consumption', itemStyle: { color: YELLOW } },
+              { name: '◆ Grid export',     itemStyle: { color: PINK } },
+            ],
+            links: [
+              { source: '▲ Solar produced', target: 'House consumption', value: +f.from_solar.toFixed(1),
+                lineStyle: { color: SOLAR, opacity: 0.5 } },
+              { source: '▲ Solar produced', target: '◆ Grid export',     value: +f.to_grid.toFixed(1),
+                lineStyle: { color: PINK,  opacity: 0.5 } },
+              { source: '● Grid import',    target: 'House consumption', value: +f.from_grid.toFixed(1),
+                lineStyle: { color: GRID,  opacity: 0.5 } },
+            ],
+          }],
+        },
+        media: [{
+          query: { maxWidth: 600 },
+          option: {
+            series: [{
+              left: 20, right: 110, top: 20, bottom: 20,
+              label: { fontSize: 11 },
+            }],
+          },
+        }],
+      });
+      window.addEventListener('resize', () => chart.resize());
+    }
+
+    // ---- Time-of-day mismatch ----
+    {
+      const data = JSON.parse(document.getElementById('mismatch-data').textContent);
+      const byHour = Object.fromEntries(data.map(r => [r.hour, r]));
+      const hours = Array.from({length: 24}, (_, h) => h);
+      const labels = hours.map(h => String(h).padStart(2,'0') + ':00');
+      const solar = hours.map(h => +((byHour[h]?.solar) || 0).toFixed(3));
+      const cons  = hours.map(h => +((byHour[h]?.consumed) || 0).toFixed(3));
+
+      const chart = echarts.init(document.getElementById('mismatch-chart'), 'span-dark');
+      chart.setOption({
+        tooltip: { trigger: 'axis',
+          valueFormatter: v => v == null ? '—' : `${v.toFixed(2)} kWh` },
+        legend: { top: 0 },
+        grid: { left: 60, right: 30, top: 40, bottom: 50 },
+        xAxis: { type: 'category', data: labels },
+        yAxis: { type: 'value', name: 'kWh / hour' },
+        series: [
+          { name: '▲ Solar produced', type: 'line', smooth: true,
+            data: solar, symbol: 'circle', symbolSize: 5,
+            areaStyle: { color: 'rgba(245,158,11,0.25)' },
+            lineStyle: { color: SOLAR, width: 2 },
+            itemStyle: { color: SOLAR } },
+          { name: '● House consumed', type: 'line', smooth: true,
+            data: cons, symbol: 'circle', symbolSize: 5,
+            lineStyle: { color: GRID, width: 2 },
+            itemStyle: { color: GRID } },
+        ],
+      });
+      window.addEventListener('resize', () => chart.resize());
+    }
+
+    // ---- Phantom load ----
+    {
+      const rows = JSON.parse(document.getElementById('phantom-data').textContent);
+      const dates = rows.map(r => r.date);
+      const vals  = rows.map(r => +r.min_power_kw.toFixed(3));
+
+      // 7-day rolling average for the trend line
+      const ravg = vals.map((_, i) => {
+        const lo = Math.max(0, i - 6);
+        const slice = vals.slice(lo, i + 1);
+        return +(slice.reduce((a, b) => a + b, 0) / slice.length).toFixed(3);
+      });
+
+      const chart = echarts.init(document.getElementById('phantom-chart'), 'span-dark');
+      chart.setOption({
+        tooltip: { trigger: 'axis',
+          valueFormatter: v => v == null ? '—' : `${(v * 1000).toFixed(0)} W` },
+        legend: { top: 0 },
+        grid: { left: 60, right: 30, top: 40, bottom: 60 },
+        xAxis: { type: 'category', data: dates,
+          axisLabel: { rotate: 35, formatter: (v) => v.slice(5) },
+        },
+        yAxis: { type: 'value', name: 'kW (min bucket)' },
+        series: [
+          { name: '● Daily minimum', type: 'line',
+            data: vals, symbol: 'circle', symbolSize: 4,
+            lineStyle: { color: GRID, width: 1, opacity: 0.6 },
+            itemStyle: { color: GRID } },
+          { name: '▲ 7-day rolling avg', type: 'line', smooth: true,
+            data: ravg, symbol: 'none',
+            lineStyle: { color: SOLAR, width: 2.5 },
+            itemStyle: { color: SOLAR } },
+        ],
+      });
+      window.addEventListener('resize', () => chart.resize());
+    }
+  });
+</script>
+{% endblock %}

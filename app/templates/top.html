@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+
+{% block title %}Top consumers — span-viewer{% endblock %}
+
+{% block content %}
+<section class="pickers">
+  <a class="pill {% if window == '30d'  %}active{% endif %}" href="/top?window=30d#rank">Last 30 days</a>
+  <a class="pill {% if window == '90d'  %}active{% endif %}" href="/top?window=90d#rank">Last 90 days</a>
+  <a class="pill {% if window == '12mo' %}active{% endif %}" href="/top?window=12mo#rank">Last 12 months</a>
+  <a class="pill {% if window == 'all'  %}active{% endif %}" href="/top?window=all#rank">All time</a>
+</section>
+
+<section class="panel" id="rank">
+  <h2>Top consumers — {{ window }} ({{ '%.0f'|format(total_kwh) }} kWh total)</h2>
+  <div id="rank-chart" style="width: 100%; height: 540px;"></div>
+</section>
+
+<section class="panel">
+  <h2>Ranked table</h2>
+  <table class="rank">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Circuit</th>
+        <th class="num">kWh</th>
+        <th class="num">% of total</th>
+        <th class="bar"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td>{{ r.name }}</td>
+        <td class="num">{{ '%.0f'|format(r.kwh) }}</td>
+        <td class="num">{{ '%.1f%%'|format(r.share * 100) }}</td>
+        <td class="bar"><span class="bar-fill" style="width: {{ (r.share / rows[0].share * 100)|round(1) }}%"></span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<script type="application/json" id="rank-data">{{ rows_json | safe }}</script>
+<script>
+  window.addEventListener('load', () => {
+    const rows = JSON.parse(document.getElementById('rank-data').textContent);
+    if (!rows.length || typeof echarts === 'undefined') return;
+
+    // CB-safe single-hue palette (sky-400 base, fade with index) so the bar
+    // chart doesn't compete with the YoY year colors. Top item is brightest.
+    const palette = ['#38bdf8', '#0ea5e9', '#0284c7', '#0369a1', '#075985', '#0c4a6e'];
+    const colorFor = (i) => palette[Math.min(i, palette.length - 1)];
+
+    const chart = echarts.init(document.getElementById('rank-chart'), 'span-dark');
+    // baseOption + media so the chart re-targets its label area on viewport
+    // resize without us having to wire a JS resize listener for setOption.
+    // On phones the desktop's 280-px label gutter would leave near-zero room
+    // for the bars themselves — shrink to 110 px and let labels truncate.
+    chart.setOption({
+      baseOption: {
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: { type: 'shadow' },
+          valueFormatter: (v) => v == null ? '—' : `${v.toFixed(0)} kWh`,
+        },
+        grid: { left: 280, right: 30, top: 10, bottom: 30 },
+        xAxis: {
+          type: 'value',
+          name: 'kWh',
+          nameLocation: 'middle',
+          nameGap: 24,
+        },
+        yAxis: {
+          type: 'category',
+          data: rows.map(r => r.name).reverse(),  // top item at top
+          axisLabel: { width: 270, overflow: 'truncate' },
+          axisTick: { show: false },
+        },
+        series: [{
+          type: 'bar',
+          data: rows.map((r, i) => ({
+            value: Math.round(r.kwh),
+            itemStyle: { color: colorFor(i) },
+          })).reverse(),
+          label: {
+            show: true,
+            position: 'right',
+            color: '#e2e8f0',
+            formatter: (p) => `${p.value} kWh`,
+          },
+        }],
+      },
+      media: [{
+        query: { maxWidth: 600 },
+        option: {
+          grid: { left: 110, right: 50 },
+          yAxis: { axisLabel: { width: 100, fontSize: 11 } },
+          series: [{ label: { fontSize: 11 } }],
+        },
+      }],
+    });
+
+    window.addEventListener('resize', () => chart.resize());
+  });
+</script>
+{% endblock %}

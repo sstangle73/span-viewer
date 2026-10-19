@@ -1,0 +1,11 @@
+[Unit]
+Description=Poll origin/main for span-viewer changes every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Unit=span-viewer-deploy.service
+
+[Install]
+WantedBy=timers.target

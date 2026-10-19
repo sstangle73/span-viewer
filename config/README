@@ -1,0 +1,2 @@
+# Mounted at /etc/span-viewer in the containers: put credentials.json,
+# span-api-credentials.json, span-ca.pem and circuits.yaml here. Ignored by git.

@@ -1,0 +1,20 @@
+[Unit]
+Description=span-viewer SPAN panel firmware watcher -> ntfy (one-shot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/span-viewer
+Environment=PYTHONUNBUFFERED=1
+# Settings (TZ, DATABASE_URL, SPAN_HOST, MQTT_URL ...): see config.example.toml.
+EnvironmentFile=-/etc/span-viewer/span-viewer.env
+# Secrets (NTFY_TOPIC), chmod 600.
+EnvironmentFile=-/etc/span-viewer/secrets.env
+# Override to retune.
+#Environment=MIGRATION_RELEASE=r202633
+ExecStart=/opt/span-viewer/.venv/bin/python -m ingester.firmware_watch
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=60s

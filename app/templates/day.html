@@ -1,0 +1,450 @@
+{% extends "base.html" %}
+
+{% block title %}Day view — {{ date }} — span-viewer{% endblock %}
+
+{% block content %}
+<section class="controls">
+  <div class="pickers" style="margin: 0; align-self: center;">
+    <a class="pill" href="/day?date={{ prev_week_date }}&circuit={{ selected_circuit }}"
+       title="Previous week (Shift+←)">◀◀ −7d</a>
+    <a class="pill" href="/day?date={{ prev_date }}&circuit={{ selected_circuit }}"
+       title="Previous day (←)">◀ Prev</a>
+  </div>
+  <form method="get" action="/day">
+    <label for="date">Date</label>
+    <input type="date" id="date" name="date" value="{{ date }}" onchange="this.form.submit()">
+    <input type="hidden" name="circuit" value="{{ selected_circuit }}">
+  </form>
+  <div class="pickers" style="margin: 0; align-self: center;">
+    <a class="pill {% if next_is_future %}disabled{% endif %}"
+       {% if not next_is_future %}href="/day?date={{ next_date }}&circuit={{ selected_circuit }}"{% endif %}
+       title="Next day (→)">Next ▶</a>
+    <a class="pill {% if next_week_is_future %}disabled{% endif %}"
+       {% if not next_week_is_future %}href="/day?date={{ next_week_date }}&circuit={{ selected_circuit }}"{% endif %}
+       title="Next week (Shift+→)">+7d ▶▶</a>
+    <a class="pill" href="/day?date={{ today_date }}&circuit={{ selected_circuit }}"
+       title="Today (T)">Today</a>
+  </div>
+  <form method="get" action="/day">
+    <label for="circuit">Circuit</label>
+    <input type="hidden" name="date" value="{{ date }}">
+    <select id="circuit" name="circuit" onchange="this.form.submit()">
+      {% for c in circuits %}
+        {% set cid = c.id if c.id is defined else c.space_id %}
+        <option value="{{ cid }}" {% if cid == selected_circuit %}selected{% endif %}>
+          {{ c.name }}
+        </option>
+      {% endfor %}
+    </select>
+  </form>
+</section>
+
+<script>
+  // Keyboard shortcuts: ←/→ step a day, Shift+←/→ steps a week.
+  // Ignored when typing in a form field; null targets (future) are no-ops.
+  (function () {
+    const c     = encodeURIComponent({{ selected_circuit | tojson }});
+    const prev  = {{ prev_date | tojson }};
+    const prevW = {{ prev_week_date | tojson }};
+    const next  = {{ (next_date if not next_is_future else None) | tojson }};
+    const nextW = {{ (next_week_date if not next_week_is_future else None) | tojson }};
+    document.addEventListener('keydown', (e) => {
+      const tag = (e.target && e.target.tagName) || '';
+      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      let go = null;
+      if (e.key === 'ArrowLeft')       go = e.shiftKey ? prevW : prev;
+      else if (e.key === 'ArrowRight') go = e.shiftKey ? nextW : next;
+      else if (e.key === 't' || e.key === 'T') go = {{ today_date | tojson }};
+      if (go) {
+        e.preventDefault();
+        window.location.href = `/day?date=${go}&circuit=${c}`;
+      }
+    });
+  })();
+</script>
+
+{% if same_month and same_month|length > 1 %}
+<section class="panel">
+  <h2>Same month-to-date, prior years</h2>
+  <div class="tiles">
+    {% set tile_styles = ['t-blue', 't-orange', 't-magenta', 't-violet', 't-yellow'] %}
+    {% for r in same_month %}
+    <div class="tile {{ tile_styles[loop.index0 % tile_styles|length] }}">
+      <div class="label">{{ r.year }} (Jan–{{ date[5:] }} approx)</div>
+      <div class="value">{{ '{:,.0f}'.format(r.consumed or 0) }}<span class="unit">kWh</span></div>
+      <div class="sub">
+        ▲ {{ '%.0f'|format(r.produced or 0) }} solar ·
+        ◆ {{ '%.0f'|format(r.exported or 0) }} exported ·
+        ● {{ '%.0f'|format(r.imported or 0) }} from grid
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  <p style="font-size: 0.75rem; color: var(--muted); margin: 0.5rem 0 0;">
+    Each tile is consumption for <strong>{{ date[:7] }}</strong>'s month through day {{ date[8:] }} of that year — apples-to-apples month-to-date.
+  </p>
+</section>
+{% endif %}
+
+{% if prior_years and prior_years|length > 1 %}
+<section class="panel">
+  <h2>Same calendar day, prior years</h2>
+  <div class="tiles">
+    {% for r in prior_years %}
+    <div class="tile {% if r.date == date %}t-yellow{% elif loop.index0 == 0 %}t-blue{% elif loop.index0 == 1 %}t-orange{% else %}t-magenta{% endif %}">
+      <div class="label">{{ r.year }}</div>
+      <div class="value">
+        {% if r.consumed is defined %}
+          {{ '%.1f'|format(r.consumed or 0) }}<span class="unit">kWh</span>
+        {% else %}
+          —
+        {% endif %}
+      </div>
+      <div class="sub">
+        <a href="/day?date={{ r.date }}&circuit={{ selected_circuit }}">{{ r.date }}</a>
+        {% if r.produced is defined and r.produced %} · ▲ {{ '%.0f'|format(r.produced) }} kWh produced{% endif %}
+        {% if r.exported is defined and r.exported %} · ◆ {{ '%.0f'|format(r.exported) }} kWh exported{% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+{% set is_whole_house = selected_circuit == 'whole_house' %}
+{% set granularity_label %}
+  {% if granularity == 600 %}10-min resolution
+  {% elif granularity == 3600 %}hourly resolution
+  {% elif granularity == 86400 %}daily aggregate only (no sub-day data for this date)
+  {% else %}{{ granularity }}s resolution
+  {% endif %}
+{% endset %}
+
+{% if is_whole_house %}
+<section class="panel">
+  <h2>Load — {{ date }}</h2>
+  {% if granularity %}
+    <p style="font-size: 0.8rem; color: var(--muted); margin: 0 0 0.5rem;">{{ granularity_label }}</p>
+  {% endif %}
+  <div id="load-chart" style="width: 100%; height: 380px;"></div>
+  <p style="font-size: 0.8rem; color: var(--muted); margin: 0.5rem 0 0;">
+    Stacked bars: ▲ amber = load served directly by solar,
+    ■ blue = load served from the grid (bill driver).
+    The white line on top is total household load. Y axis is
+    <strong>average power (kW)</strong> in each bucket.
+  </p>
+</section>
+
+<section class="panel">
+  <h2>Solar — {{ date }}</h2>
+  <div id="solar-chart" style="width: 100%; height: 380px;"></div>
+  <p style="font-size: 0.8rem; color: var(--muted); margin: 0.5rem 0 0;">
+    Stacked bars: ▲ amber = solar consumed on-site (offset bill),
+    ◆ magenta = solar exported to grid (banked under 1:1 net metering).
+    The yellow dashed line is gross solar production — it should match the
+    stack height as a sanity check.
+  </p>
+</section>
+{% else %}
+<section class="panel">
+  <h2>{{ day.circuit_name }} — {{ date }}</h2>
+  {% if granularity %}
+    <p style="font-size: 0.8rem; color: var(--muted); margin: 0 0 0.5rem;">{{ granularity_label }}</p>
+  {% endif %}
+  <div id="day-chart" style="width: 100%; height: 460px;"></div>
+  <p style="font-size: 0.8rem; color: var(--muted); margin: 0.5rem 0 0;">
+    Y axis is <strong>average power (kW)</strong> in each bucket
+    — derived from <code>energy_kwh × 3600 / duration_s</code>. Sums of the
+    bar heights × bucket width recover the kWh totals shown elsewhere.
+  </p>
+</section>
+{% endif %}
+
+{% if day.series %}
+<section class="panel">
+  <h2>Bucket-by-bucket data</h2>
+  <div class="scroll-x">
+    <table class="rank">
+      <thead>
+        <tr>
+          <th>Local time</th>
+          {% for metric in day.series.keys() %}
+          <th class="num">{{ metric }}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% set first_key = (day.series.keys() | list)[0] %}
+        {% for i in range(day.series[first_key]|length) %}
+        <tr>
+          <td>{{ day.series[first_key][i].ts[11:16] }}</td>
+          {% for metric in day.series.keys() %}
+          <td class="num">{{ '%.3f'|format(day.series[metric][i].kwh) }}</td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% else %}
+<section class="panel">
+  <h2>No data for this date</h2>
+  <p style="color: var(--muted);">
+    Try another date — SPAN's customer API exposes per-circuit and
+    buildingConnection data back to panel commissioning (April 2024),
+    but resolution coarsens with age. Cells without data have no readings
+    at any tier.
+  </p>
+</section>
+{% endif %}
+
+{% if per_circuit and per_circuit.totals %}
+<section class="panel">
+  <h2>Per-circuit breakdown — {{ date }}</h2>
+  <div id="per-circuit-chart" style="width: 100%; height: 460px;"></div>
+  <p style="font-size: 0.8rem; color: var(--muted); margin: 0.5rem 0 0;">
+    Stacked area shows each circuit's average power through the day.
+    Top {{ 8 if per_circuit.totals|length > 8 else per_circuit.totals|length }} circuits by total kWh
+    are colored; the rest roll into "Other". Click any circuit name in the table below
+    to drill into that circuit's day view.
+  </p>
+</section>
+
+<section class="panel">
+  <h2>Circuit totals for the day</h2>
+  <table class="rank">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Circuit</th>
+        <th class="num">kWh</th>
+        <th class="num">% of day</th>
+        <th class="bar"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% set total_day = per_circuit.totals | sum(attribute='kwh') %}
+      {% set max_kwh = per_circuit.totals[0].kwh if per_circuit.totals else 1 %}
+      {% for r in per_circuit.totals %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td><a href="/day?date={{ date }}&circuit={{ r.space_id }}">{{ r.name }}</a></td>
+        <td class="num">{{ '%.2f'|format(r.kwh) }}</td>
+        <td class="num">{{ '%.1f%%'|format((r.kwh / total_day * 100) if total_day else 0) }}</td>
+        <td class="bar"><span class="bar-fill" style="width: {{ (r.kwh / max_kwh * 100)|round(1) }}%;"></span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<script type="application/json" id="day-data">{{ day_json | safe }}</script>
+<script type="application/json" id="per-circuit-rows">{{ per_circuit_rows_json | safe }}</script>
+<script>
+  window.addEventListener('load', () => {
+    const series = JSON.parse(document.getElementById('day-data').textContent);
+    if (typeof echarts === 'undefined') return;
+
+    const xTime = {
+      type: 'time',
+      axisLabel: { formatter: (val) => {
+        const d = new Date(val);
+        return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+      } },
+    };
+    const yPower = { type: 'value', name: 'kW', axisLabel: { formatter: '{value}' } };
+    const tooltipPower = {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      valueFormatter: (v) => v == null ? '—' : `${v.toFixed(2)} kW`,
+    };
+    const seriesToData = (m) => (series[m] || []).map(p => [p.ts, +p.power_kw.toFixed(3)]);
+    const hasData = series && Object.keys(series).length;
+
+    // Whole-house renders Load + Solar side-by-side; per-circuit renders one chart.
+    const loadEl   = document.getElementById('load-chart');
+    const solarEl  = document.getElementById('solar-chart');
+    const dayEl    = document.getElementById('day-chart');
+
+    const noDataOpt = {
+      title: { text: 'No data', left: 'center', top: 'middle',
+               textStyle: { color: '#94a3b8', fontSize: 14 } },
+    };
+
+    // ---- Load chart (whole-house) -----------------------------------------
+    if (loadEl) {
+      const chart = echarts.init(loadEl, 'span-dark');
+      if (!hasData) {
+        chart.setOption(noDataOpt);
+      } else {
+        chart.setOption({
+          tooltip: tooltipPower,
+          legend: { top: 0 },
+          grid: { left: 60, right: 30, top: 40, bottom: 50 },
+          xAxis: xTime,
+          yAxis: yPower,
+          series: [
+            { name: '▲ Served by solar', type: 'bar', stack: 'load',
+              itemStyle: { color: '#f59e0b' }, data: seriesToData('building_from_solar') },
+            { name: '■ Served by grid',  type: 'bar', stack: 'load',
+              itemStyle: { color: '#3b82f6' }, data: seriesToData('building_from_grid') },
+            { name: '● Total load',      type: 'line', smooth: true, symbol: 'none',
+              lineStyle: { color: '#e2e8f0', width: 2.5 },
+              itemStyle: { color: '#e2e8f0' },
+              data: seriesToData('building_total') },
+          ],
+        });
+      }
+      window.addEventListener('resize', () => chart.resize());
+    }
+
+    // ---- Solar chart (whole-house) ----------------------------------------
+    if (solarEl) {
+      const chart = echarts.init(solarEl, 'span-dark');
+      if (!hasData) {
+        chart.setOption(noDataOpt);
+      } else {
+        chart.setOption({
+          tooltip: tooltipPower,
+          legend: { top: 0 },
+          grid: { left: 60, right: 30, top: 40, bottom: 50 },
+          xAxis: xTime,
+          yAxis: yPower,
+          series: [
+            { name: '▲ Used on-site', type: 'bar', stack: 'solar',
+              itemStyle: { color: '#f59e0b' }, data: seriesToData('building_from_solar') },
+            { name: '◆ Exported',     type: 'bar', stack: 'solar',
+              itemStyle: { color: '#ec4899' }, data: seriesToData('solar_to_grid') },
+            { name: '◇ Gross solar',  type: 'line', smooth: true, symbol: 'none',
+              lineStyle: { color: '#facc15', width: 2, type: 'dashed' },
+              itemStyle: { color: '#facc15' },
+              data: seriesToData('solar') },
+          ],
+        });
+      }
+      window.addEventListener('resize', () => chart.resize());
+    }
+
+    // ---- Single-circuit chart ---------------------------------------------
+    if (dayEl) {
+      const chart = echarts.init(dayEl, 'span-dark');
+      if (!hasData) {
+        chart.setOption(noDataOpt);
+      } else {
+        chart.setOption({
+          tooltip: tooltipPower,
+          legend: { top: 0 },
+          grid: { left: 60, right: 30, top: 40, bottom: 50 },
+          xAxis: xTime,
+          yAxis: yPower,
+          series: [{
+            name: '● circuit', type: 'bar',
+            itemStyle: { color: '#38bdf8' },
+            data: seriesToData('circuit'),
+          }],
+        });
+      }
+      window.addEventListener('resize', () => chart.resize());
+    }
+
+    // ---- Per-circuit stacked area (only when whole-house view) ----
+    const pcRowsEl = document.getElementById('per-circuit-rows');
+    const pcRaw = pcRowsEl ? JSON.parse(pcRowsEl.textContent) : null;
+    if (pcRaw && pcRaw.length) {
+      // CB-safe palette; 8 distinct hues monotonic in lightness + grayscale-safe
+      const PALETTE = [
+        '#1e3a8a',  // deep blue
+        '#0ea5e9',  // sky
+        '#22c55e',  // emerald
+        '#facc15',  // yellow
+        '#f59e0b',  // amber
+        '#ec4899',  // magenta
+        '#a855f7',  // violet
+        '#6366f1',  // indigo
+      ];
+      const OTHER_COLOR = '#64748b';  // slate-500 for "Other"
+
+      // 1. Per-space totals so we can pick the top 8.
+      const totals = new Map();
+      for (const r of pcRaw) totals.set(r.space_id, (totals.get(r.space_id) || 0) + r.kwh);
+      const ranked = [...totals.entries()].sort((a, b) => b[1] - a[1]);
+      const topIds = new Set(ranked.slice(0, 8).map(([id]) => id));
+
+      // 2. Map space_id -> display name (and a memoised colour assignment).
+      const names = {};
+      for (const r of pcRaw) names[r.space_id] = r.name;
+      const colorById = {};
+      let i = 0;
+      for (const [id] of ranked) {
+        if (topIds.has(id)) { colorById[id] = PALETTE[i % PALETTE.length]; i++; }
+      }
+
+      // 3. Pivot: ts -> { space_id|"Other" : power_kw }
+      const byTs = new Map();
+      for (const r of pcRaw) {
+        if (!byTs.has(r.ts)) byTs.set(r.ts, {});
+        const slot = byTs.get(r.ts);
+        const key = topIds.has(r.space_id) ? r.space_id : 'Other';
+        const power = (r.kwh * 3600.0) / (r.duration_s || 600);
+        slot[key] = (slot[key] || 0) + power;
+      }
+      const timestamps = [...byTs.keys()].sort();
+
+      // 4. Build ECharts series — top 8 named, plus optional "Other".
+      const pcSeries = [];
+      for (const [id] of ranked) {
+        if (!topIds.has(id)) break;
+        pcSeries.push({
+          name: names[id],
+          type: 'line', stack: 'load',
+          areaStyle: { opacity: 0.7 },
+          lineStyle: { width: 0 },
+          symbol: 'none',
+          smooth: 0.1,
+          itemStyle: { color: colorById[id] },
+          data: timestamps.map(ts => +(byTs.get(ts)[id] || 0).toFixed(3)),
+        });
+      }
+      if (ranked.length > 8) {
+        pcSeries.push({
+          name: 'Other',
+          type: 'line', stack: 'load',
+          areaStyle: { opacity: 0.6 },
+          lineStyle: { width: 0 },
+          symbol: 'none',
+          smooth: 0.1,
+          itemStyle: { color: OTHER_COLOR },
+          data: timestamps.map(ts => +(byTs.get(ts).Other || 0).toFixed(3)),
+        });
+      }
+
+      const pcContainer = document.getElementById('per-circuit-chart');
+      const pcChart = echarts.init(pcContainer, 'span-dark');
+      pcChart.setOption({
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: { type: 'cross' },
+          valueFormatter: (v) => v == null ? '—' : `${v.toFixed(2)} kW`,
+        },
+        legend: { top: 0, type: 'scroll' },
+        grid: { left: 60, right: 30, top: 50, bottom: 50 },
+        xAxis: {
+          type: 'category',
+          data: timestamps.map(ts => {
+            const d = new Date(ts);
+            return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+          }),
+          // Show one label per hour rather than every 10-min — too crowded otherwise.
+          axisLabel: { interval: (idx, val) => val.endsWith(':00') },
+        },
+        yAxis: { type: 'value', name: 'kW' },
+        series: pcSeries,
+      });
+      window.addEventListener('resize', () => pcChart.resize());
+    }
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+
+{% block title %}Dehumidifier — span-viewer{% endblock %}
+
+{% block content %}
+<section class="pickers">
+  {% for n in [30, 60, 120] %}
+    <a class="pill {% if days == n %}active{% endif %}" href="/dehumidifier?days={{ n }}#chart">Last {{ n }} days</a>
+  {% endfor %}
+</section>
+
+<section class="panel">
+  <h2>{{ d.label or 'Dehumidifier' }}</h2>
+  <div class="tiles">
+    <div class="tile t-blue">
+      <div class="label">▼ Last {{ d.last30_days }} days</div>
+      <div class="value">{{ '%.0f'|format(d.last30_kwh) }}<span class="unit">kWh</span></div>
+      <div class="sub">{{ '%.1f'|format(d.last30_kwh / d.last30_days if d.last30_days else 0) }} kWh a day</div>
+    </div>
+    {% if d.rate is not none %}
+    <div class="tile t-orange">
+      <div class="label">▲ Cost, last {{ d.last30_days }} days</div>
+      <div class="value">${{ '%.0f'|format(d.last30_cost) }}</div>
+      <div class="sub">at the flat ${{ '%.4f'|format(d.rate) }}/kWh</div>
+    </div>
+    {% endif %}
+    <div class="tile t-violet">
+      <div class="label">● Running</div>
+      <div class="value">{{ '%.0f'|format(d.last30_duty_pct or 0) }}<span class="unit">% of the time</span></div>
+      <div class="sub">10-min buckets averaging ≥ {{ '%.0f'|format(d.on_kw * 1000) }} W</div>
+    </div>
+  </div>
+  <p style="font-size: 0.8rem; color: var(--muted); margin: 0.5rem 0 0;">
+    The circuit configured as <code>dehumidifier</code> under <code>duty_cycle:</code> in
+    <code>circuits.yaml</code>, from {{ d.since or 'its first reading' }}. A 10-minute bucket averaging
+    the entry's <code>on_kw</code> or more counts as running. All configured duty-cycle circuits are on
+    <a href="/duty">Duty cycles</a>.
+  </p>
+</section>
+
+<section class="panel" id="chart">
+  <h2>Daily kWh and hours running</h2>
+  <div id="dehum-chart" style="width: 100%; height: 360px;"></div>
+</section>
+
+<section class="panel">
+  <h2>By month</h2>
+  <table class="recon-table">
+    <thead>
+      <tr><th>Month</th><th class="num">Days</th><th class="num">kWh</th><th class="num">kWh per 30 days</th>{% if d.rate is not none %}<th class="num">$</th>{% endif %}</tr>
+    </thead>
+    <tbody>
+      {% for m in d.monthly %}
+      <tr>
+        <td><code>{{ m.month }}</code></td>
+        <td class="num">{{ m.days }}</td>
+        <td class="num">{{ '%.0f'|format(m.kwh) }}</td>
+        <td class="num">{{ '%.0f'|format(m.kwh * 30 / m.days) if m.days else '—' }}</td>
+        {% if d.rate is not none %}<td class="num">${{ '%.2f'|format(m.cost) }}</td>{% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<script type="application/json" id="dehum-data">{{ daily_json | safe }}</script>
+<script>
+  window.addEventListener('load', () => {
+    if (typeof echarts === 'undefined') return;
+    const rows = JSON.parse(document.getElementById('dehum-data').textContent);
+    const chart = echarts.init(document.getElementById('dehum-chart'), 'span-dark');
+    chart.setOption({
+      tooltip: { trigger: 'axis' },
+      legend: { top: 0 },
+      grid: { left: 55, right: 55, top: 40, bottom: 50 },
+      xAxis: { type: 'category', data: rows.map(r => r.date), axisLabel: { rotate: 30 } },
+      yAxis: [
+        { type: 'value', name: 'kWh' },
+        { type: 'value', name: 'hours', max: 24, splitLine: { show: false } },
+      ],
+      series: [
+        { name: '■ kWh', type: 'bar', data: rows.map(r => +r.kwh.toFixed(2)),
+          itemStyle: { color: '#3b82f6' } },
+        { name: '▲ Hours running', type: 'line', yAxisIndex: 1, symbol: 'triangle', symbolSize: 6,
+          data: rows.map(r => +r.hours_on.toFixed(1)),
+          itemStyle: { color: '#f59e0b' }, lineStyle: { color: '#f59e0b' } },
+      ],
+    });
+    window.addEventListener('resize', () => chart.resize());
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,22 @@
+[Unit]
+Description=span-viewer FastAPI app
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/span-viewer
+Environment=PYTHONUNBUFFERED=1
+# Settings (TZ, DATABASE_URL, SPAN_HOST, MQTT_URL ...): see config.example.toml.
+EnvironmentFile=-/etc/span-viewer/span-viewer.env
+# uvicorn reads the trusted proxies from FORWARDED_ALLOW_IPS (env file).
+ExecStart=/opt/span-viewer/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1 --proxy-headers
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

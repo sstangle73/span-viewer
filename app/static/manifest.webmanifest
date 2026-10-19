@@ -1,0 +1,28 @@
+{
+  "name": "span-viewer",
+  "short_name": "span-viewer",
+  "description": "Historical analytics for the SPAN smart electrical panel.",
+  "start_url": "/yoy",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "lang": "en-US",
+  "categories": ["utilities", "productivity"],
+  "icons": [
+    {
+      "src": "/static/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    { "name": "Live",        "short_name": "Live",     "url": "/live" },
+    { "name": "YoY",         "short_name": "YoY",      "url": "/yoy" },
+    { "name": "Solar",       "short_name": "Solar",    "url": "/solar" },
+    { "name": "Day view",    "short_name": "Day",      "url": "/day" },
+    { "name": "Health",      "short_name": "Health",   "url": "/health" }
+  ]
+}

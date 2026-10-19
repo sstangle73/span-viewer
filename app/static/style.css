@@ -1,0 +1,640 @@
+/* span-viewer — first pass. CB-safe palette throughout; status colors are
+   distinguished by both hue AND a shape glyph baked into the markup. */
+
+:root {
+  --bg:        #0f172a;        /* slate-900 */
+  --surface:   #1e293b;        /* slate-800 */
+  --border:    #334155;        /* slate-700 */
+  --text:      #e2e8f0;        /* slate-200 */
+  --muted:     #94a3b8;        /* slate-400 */
+  --accent:    #38bdf8;        /* sky-400 */
+  --ok:        #3b82f6;        /* blue */
+  --warn:      #f59e0b;        /* amber */
+  --bad:       #ec4899;        /* magenta — used in place of red */
+  --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  line-height: 1.5;
+}
+
+/* Default inline links (e.g. clickable dates in tables). Browser default
+   is near-black blue and dark-purple-visited — both invisible on slate-900.
+   Sky accent + kept underline as the "clickable" cue. */
+a         { color: var(--accent); text-decoration-color: rgba(56,189,248,0.5); }
+a:visited { color: var(--accent); }
+a:hover   { color: #7dd3fc; text-decoration-color: #7dd3fc; }
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  /* env(safe-area-inset-*) keeps the sticky header below the iPhone notch
+     and clear of the home-bar gutter when the app is launched standalone
+     from the home screen (viewport-fit=cover in base.html). max() so the
+     baseline padding wins on non-notched browsers. */
+  padding:
+    max(0.6rem, env(safe-area-inset-top))
+    max(1rem,   env(safe-area-inset-right))
+    0.6rem
+    max(1rem,   env(safe-area-inset-left));
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+
+/* Brand + page title — clickable summary that toggles the nav drawer. */
+.nav-drawer { position: relative; }
+.nav-drawer > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  cursor: pointer;
+  list-style: none;
+  padding: 0.3rem 0.5rem;
+  margin: -0.3rem -0.5rem;
+  border-radius: 5px;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.nav-drawer > summary::-webkit-details-marker { display: none; }
+.nav-drawer > summary::marker { content: ''; }
+.nav-drawer > summary:hover { background: rgba(255,255,255,0.04); }
+.nav-drawer[open] > summary { background: rgba(255,255,255,0.06); }
+
+.hamburger {
+  font-size: 1.15rem;
+  line-height: 1;
+  color: var(--muted);
+  transition: color 0.15s;
+}
+.nav-drawer[open] .hamburger { color: var(--accent); }
+
+.brand-title {
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text);
+}
+.brand-sep { color: var(--border); }
+.current-page {
+  color: var(--accent);
+  font-size: 0.95rem;
+  font-weight: 500;
+  /* Truncate long page titles so the header never wraps on phone. */
+  max-width: 40vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The drawer panel — popover under the summary, grouped grid inside. */
+.nav-menu {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  left: -0.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.85rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.85rem 1.25rem;
+  /* Wide enough on desktop to show all five groups side-by-side; capped
+     by viewport on mobile so it never overflows the screen. */
+  width: max-content;
+  max-width: calc(100vw - 1rem);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.45);
+  z-index: 100;
+}
+
+.nav-group { display: flex; flex-direction: column; min-width: 130px; }
+.nav-group-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  padding: 0 0.5rem 0.3rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.35rem;
+  font-weight: 600;
+}
+.nav-link {
+  display: block;
+  padding: 0.4rem 0.55rem;
+  color: var(--text);
+  text-decoration: none;
+  border-radius: 4px;
+  font-size: 0.92rem;
+  line-height: 1.3;
+}
+.nav-link:hover { background: rgba(255,255,255,0.06); color: var(--text); }
+.nav-link.active {
+  color: var(--accent);
+  background: rgba(56,189,248,0.14);
+  font-weight: 500;
+}
+
+/* Health indicator on the right — gracefully shrinks on phone. */
+.health {
+  font-size: 0.82rem;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.health time { font-family: var(--mono); }
+.health .status {
+  display: inline-block;
+  padding: 0 0.4em;
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 0.85em;
+}
+/* Status hue paired with a leading glyph in case the user can't see the hue. */
+.health .status-success::before  { content: '● '; color: var(--ok); }
+.health .status-running::before  { content: '▶ '; color: var(--accent); }
+.health .status-failed::before   { content: '■ '; color: var(--bad); }
+.health .status-success          { color: var(--ok); }
+.health .status-running          { color: var(--accent); }
+.health .status-failed           { color: var(--bad); }
+
+/* Phone breakpoint — compress the header so brand + page name + status
+   dot fit on a single row on 360-wide screens. */
+@media (max-width: 600px) {
+  header { padding: 0.5rem 0.65rem; }
+  .brand-title { font-size: 0.95rem; }
+  .current-page { font-size: 0.85rem; max-width: 38vw; }
+  .health-label, .health time, .health-sep { display: none; }
+  .health .status { font-size: 0.78rem; padding: 0 0.3em; }
+  /* Drawer fills nearly the full width and anchors flush-left under the
+     summary so the grouped grid has room to breathe. */
+  .nav-menu {
+    left: -0.65rem;
+    right: -0.65rem;
+    width: auto;
+    max-width: none;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem 0.5rem;
+  }
+  .nav-group { min-width: 0; }
+}
+
+main {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+@media (max-width: 600px) {
+  main { padding: 0.85rem 0.65rem 1.5rem; }
+}
+
+section { margin-bottom: 2rem; }
+
+/* Wide tables (recon, bills, anomalies, etc.) overflow phone screens.
+   .scroll-x is a utility you can wrap a table in to get a horizontal
+   scrollbar instead of pushing the whole page wide. On phones we also
+   give the known-wide table classes their own overflow container via
+   the parent panel/section. */
+.scroll-x { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+/* Tables inside .scroll-x: use natural content width so the table can
+   overflow the wrapper horizontally (where the scrollbar lives) instead
+   of being compressed to width:100% with wrapped headers/cells. The
+   min-width:100% keeps narrow tables filling the wrapper rather than
+   collapsing to their content's right edge. */
+.scroll-x table { width: auto; min-width: 100%; }
+.scroll-x th, .scroll-x td { white-space: nowrap; }
+@media (max-width: 600px) {
+  /* Wide data tables (rank + recon) become their own horizontal scroll
+     containers on phones. Without this a 79-char circuit name or six
+     numeric columns drag the page sideways. display:block disables the
+     table-layout algo so the inner cells keep their natural widths;
+     white-space:nowrap stops headers like "building_from_solar" from
+     wrapping into squished half-columns. The scrollbar lives on the
+     table itself, so the page never overflows. */
+  .recon-table, .rank {
+    display: block;
+    overflow-x: auto;
+    max-width: 100%;
+    white-space: nowrap;
+    -webkit-overflow-scrolling: touch;
+  }
+  .rank { font-size: 0.85rem; }
+  .rank td.bar { display: none; }   /* drop the proportional-fill column on phone */
+
+  /* Cap chart and heatmap container heights on phones. Many charts use
+     an inline height of 420-540 px, which dominates the screen on a
+     ~700-px-tall phone viewport. max-height clamps the inline height
+     naturally — height and max-height are orthogonal CSS properties, so
+     the cascade computes used height = min(inline height, max-height)
+     without needing !important. Charts already at 240-380 px (which is
+     <60vh on a 700px screen) keep their inline value. */
+  .panel > div[id*="chart"],
+  .panel > div[id*="heatmap"] {
+    max-height: 60vh;
+  }
+}
+section h2 { margin: 0 0 0.75rem; font-size: 1.05rem; font-weight: 500; color: var(--text); }
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: end;
+}
+.controls form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.controls label {
+  font-size: 0.8rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.controls select,
+.controls input[type="number"] {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.4rem 0.6rem;
+  font-family: var(--font);
+  font-size: 0.95rem;
+  min-width: 24ch;
+  /* Never wider than the parent — caps a <select> that wants to grow to fit
+     a long <option> (e.g. a 79-char space name) past the viewport. */
+  max-width: 100%;
+}
+.controls input[type="number"] {
+  font-family: var(--mono);
+  min-width: 10ch;
+}
+
+/* Phone breakpoint — let the <select> shrink to fit the viewport when the
+   longest <option> is wider than the screen. Form parent becomes a full-width
+   row so the select isn't pinned at its max-content intrinsic width by a
+   shrink-to-fit flex item. The native dropdown still shows full option text
+   when tapped. */
+@media (max-width: 600px) {
+  /* :has(select) so the small number input (/yoy rate) doesn't get stretched
+     to full width too. Modern browsers all support this. */
+  .controls form:has(select) { width: 100%; min-width: 0; }
+  .controls select {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
+#chart-block {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1rem;
+}
+
+.cost table {
+  width: 100%;
+  max-width: 480px;
+  border-collapse: collapse;
+}
+.cost th, .cost td {
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+}
+.cost th {
+  text-align: left;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 500;
+  letter-spacing: 0.05em;
+}
+.cost td.num, .cost th.num { text-align: right; font-family: var(--mono); }
+
+/* Generic chart-block reuse — same dark panel as the YoY view. */
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  /* Pickers add a #anchor to their links — when the page reloads it
+     scrolls to the targeted section. Without scroll-margin-top, the
+     section ends up flush with the page top behind the header. */
+  scroll-margin-top: 1rem;
+}
+html { scroll-behavior: smooth; }
+.panel h2 { margin: 0 0 0.75rem; font-size: 1rem; font-weight: 500; }
+
+/* Helper: muted explanatory paragraph inside a .panel. Replaces the
+   ad-hoc `style="font-size: 0.8rem; color: var(--muted); margin: ..."`
+   inline blocks scattered across templates. */
+.panel-note {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin: 0 0 0.75rem;
+  line-height: 1.5;
+}
+.panel-note:last-child { margin-bottom: 0; }
+
+/* Yellow/amber call-out for "data not yet" warnings, recoverable errors,
+   and other "your attention please" messages. Designed to be CB-safe
+   (paired with a glyph in the message, not relying on yellow alone). */
+.callout-warning {
+  background: rgba(245, 158, 11, 0.10);
+  border: 1px solid #f59e0b;
+  border-radius: 4px;
+  padding: 0.6rem 0.8rem;
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text);
+}
+
+/* Standard chart container — same look as the legacy #chart-block id
+   but as a reusable class so charts on multiple pages share styling. */
+.chart-block {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem;
+  height: 420px;
+  width: 100%;
+}
+@media (max-width: 600px) {
+  .chart-block {
+    /* Slightly shorter on phones — the slider eats less of the plot area
+       when the absolute height shrinks, and a 360-px-wide chart wants a
+       proportionally shorter aspect to stay readable. */
+    height: 340px;
+    padding: 0.5rem;
+  }
+}
+
+/* Total / summary row at the bottom of a .rank table — picks up a
+   thin top border so it visually separates from the data rows. */
+.rank-total td {
+  border-top: 1px solid var(--border);
+  padding-top: 0.5rem;
+}
+
+/* Top-consumers ranked table */
+.rank {
+  width: 100%;
+  border-collapse: collapse;
+}
+.rank th, .rank td {
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+}
+.rank th {
+  text-align: left;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 500;
+  letter-spacing: 0.05em;
+}
+.rank td.num, .rank th.num { text-align: right; font-family: var(--mono); }
+.rank td.bar { width: 50%; padding-left: 0; }
+.rank .bar-fill {
+  display: inline-block;
+  height: 0.6rem;
+  border-radius: 2px;
+  background: #38bdf8;
+  vertical-align: middle;
+}
+.rank tr:nth-child(2)  .bar-fill { background: #f59e0b; }
+.rank tr:nth-child(3)  .bar-fill { background: #ec4899; }
+.rank tr:nth-child(4n) .bar-fill { background: #8b5cf6; }
+
+/* Pill button group for window/year pickers */
+.pickers { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem; }
+.pickers .pill {
+  display: inline-block;
+  padding: 0.35rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.85rem;
+}
+/* Phone: pickers are the primary nav on most pages — bump pills to ~44px
+   (Apple HIG tap-target floor) so they're easy to hit without misfires.
+   inline-flex + align-items so the label stays vertically centered when
+   min-height inflates the box past natural line height. nowrap so the
+   pill never breaks across two lines mid-tap. */
+@media (max-width: 600px) {
+  .pickers { gap: 0.4rem; }
+  .pickers .pill {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    padding: 0 0.95rem;
+    font-size: 0.92rem;
+    white-space: nowrap;
+  }
+}
+.pickers .pill:hover { color: var(--text); border-color: var(--muted); }
+.pickers .pill.active { color: var(--text); border-color: var(--accent); background: rgba(56,189,248,0.12); }
+/* Greyed-out picker — rendered as a span (no href) when the target would
+   be in the future. Cursor + opacity make it obviously inert. */
+.pickers .pill.disabled {
+  color: var(--border);
+  border-color: var(--border);
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* Stat-tile row used on the solar dashboard. */
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+.tile {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.8rem 1rem;
+}
+.tile .label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  color: var(--muted);
+  letter-spacing: 0.05em;
+  margin-bottom: 0.25rem;
+}
+.tile .value {
+  font-size: 1.6rem;
+  font-family: var(--mono);
+  font-weight: 500;
+  color: var(--text);
+}
+.tile .unit  { font-size: 0.85rem; color: var(--muted); margin-left: 0.25rem; }
+.tile .sub   { font-size: 0.75rem; color: var(--muted); margin-top: 0.2rem; }
+/* Accent stripes — each tile gets a left-border color from the CB-safe set. */
+.tile.t-blue    { border-left: 3px solid #3b82f6; }
+.tile.t-orange  { border-left: 3px solid #f59e0b; }
+.tile.t-yellow  { border-left: 3px solid #facc15; }
+.tile.t-magenta { border-left: 3px solid #ec4899; }
+.tile.t-violet  { border-left: 3px solid #8b5cf6; }
+.tile.t-sky     { border-left: 3px solid #0ea5e9; }
+
+/* Inline chips, used by /appliances to tag each row with its appliance
+   type. Colour echoes the per-tile accent and is paired with a glyph in
+   the chip text so grayscale + colour-blind readers still distinguish them. */
+.chip {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.chip-blue    { background: rgba(59,130,246,0.15);  border-color: #3b82f6; color: #1e3a8a; }
+.chip-orange  { background: rgba(245,158,11,0.15);  border-color: #f59e0b; color: #78350f; }
+.chip-yellow  { background: rgba(250,204,21,0.18);  border-color: #ca8a04; color: #713f12; }
+.chip-magenta { background: rgba(236,72,153,0.15);  border-color: #ec4899; color: #831843; }
+.chip-violet  { background: rgba(139,92,246,0.15);  border-color: #8b5cf6; color: #4c1d95; }
+.chip-sky     { background: rgba(14,165,233,0.15);  border-color: #0ea5e9; color: #0c4a6e; }
+@media (prefers-color-scheme: dark) {
+  .chip-blue    { color: #93c5fd; }
+  .chip-orange  { color: #fcd34d; }
+  .chip-yellow  { color: #fde68a; }
+  .chip-magenta { color: #f9a8d4; }
+  .chip-violet  { color: #c4b5fd; }
+  .chip-sky     { color: #7dd3fc; }
+}
+
+/* Vertical separator inside a pickers row — used when one row mixes
+   timeframe pills with appliance-filter pills. */
+.pill-sep {
+  display: inline-block;
+  width: 1px;
+  height: 1.2rem;
+  background: var(--border, #d1d5db);
+  margin: 0 0.25rem;
+  vertical-align: middle;
+}
+
+/* Two-column grid for cards that fit side-by-side on wide screens */
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+@media (min-width: 1100px) {
+  .grid-2 { grid-template-columns: 1fr 1fr; }
+}
+
+/* Shared narrow-content helpers, used by /reconciliation and friends. */
+.muted { color: var(--muted); }
+
+.recon-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.recon-table thead th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--muted);
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--border);
+  padding: 0.4rem 0.5rem;
+}
+.recon-table tbody td {
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid rgba(51, 65, 85, 0.4);
+}
+.recon-table td.num, .recon-table th.num {
+  text-align: right;
+  font-family: var(--mono);
+}
+.recon-table code { font-family: var(--mono); color: var(--muted); }
+
+/* Δ % cell — hue + glyph so it reads in grayscale and for red-green CB. */
+.delta { font-family: var(--mono); }
+.delta.ok   { color: var(--ok); }     /* blue */
+.delta.warn { color: var(--warn); }   /* amber */
+.delta.bad  { color: var(--bad); }    /* magenta */
+
+/* /bills dashboard — five panels arranged 2-up + a wide row at the bottom. */
+.bills-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+.bills-grid .panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem 1rem 1rem;
+}
+.bills-grid .panel h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.bills-grid .panel.wide { grid-column: 1 / -1; }
+.bill-chart { width: 100%; height: 280px; }
+.bills-grid .panel.wide .bill-chart { height: 360px; }
+@media (max-width: 800px) {
+  .bills-grid { grid-template-columns: 1fr; }
+}
+
+/* /counterfactual — three-up summary stat cards above the chart. */
+.cf-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+}
+.cf-summary .stat {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+}
+.cf-summary .stat-label {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  /* Brighter than --muted so the label is readable on the slate surface. */
+  color: #cbd5e1;
+  letter-spacing: 0.05em;
+}
+.cf-summary .stat-value .small {
+  font-size: 0.7rem;
+  font-family: var(--font);
+  font-weight: normal;
+  text-transform: none;
+  letter-spacing: 0;
+  margin-top: 0.2rem;
+}
+.cf-summary .stat-value {
+  font-family: var(--mono);
+  font-size: 1.4rem;
+  margin-top: 0.25rem;
+}
+@media (max-width: 700px) {
+  .cf-summary { grid-template-columns: 1fr; }
+}

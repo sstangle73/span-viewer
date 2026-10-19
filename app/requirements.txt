@@ -1,0 +1,11 @@
+fastapi>=0.115
+uvicorn[standard]>=0.32
+jinja2>=3.1
+python-multipart>=0.0.20
+psycopg[binary,pool]>=3.2
+requests>=2.32
+paho-mqtt>=2.1
+# NILM: NumPy for the factorial HMM disaggregator in app/nilm_fhmm.py
+numpy>=2.0
+# circuits.yaml (app/config.py)
+pyyaml>=6.0

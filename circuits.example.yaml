@@ -1,0 +1,88 @@
+# circuits.yaml: what some of your circuits are, for the pages that need it.
+#
+# Copy to /etc/span-viewer/circuits.yaml (or point CIRCUITS_FILE at it). Every
+# section is optional: with no file, /appliances and /duty are empty and the EV
+# charger is found by name. A circuit is named by `space_id` (SPAN's id, which
+# survives renames in the SPAN app; see /api/v1/circuits) and/or `name_match`
+# (its exact name, case-insensitive), tried in that order.
+#
+# These entries match the circuits that scripts/sample_data.py generates.
+
+# The name shown for the synthetic `__feedthrough__` row: the power through
+# the panel's feedthrough lugs to a downstream sub-panel, which SPAN meters
+# only as a total. Name it like the circuit SPAN's cloud reports for it, so
+# the live and history views agree.
+feedthrough_name: "Sub-panel"
+
+# /appliances: sessions on circuits with one big load. A session is a run of
+# 10-minute buckets averaging threshold_kw or more and using at least min_kwh.
+#   since_date       ignore readings before this (a replaced appliance)
+#   secondary_kw     also tally buckets at or above this (e.g. a heat-pump water
+#                    heater's resistive backup), labelled secondary_label
+#   high_cycle       many short sessions a day: show daily aggregates instead
+#   glyph, color     every appliance gets a distinct glyph as well as a colour,
+#                    so the page reads in grayscale. Colours: blue, yellow,
+#                    orange, violet, magenta, sky
+appliances:
+  - key: dryer
+    label: "Dryer"
+    name_match: "Dryer"
+    threshold_kw: 1.0
+    min_kwh: 0.3
+    glyph: "■"
+    color: blue
+    note: "Electric clothes dryer cycles."
+  - key: oven
+    label: "Oven & Range"
+    name_match: "Oven & Range"
+    threshold_kw: 0.8
+    min_kwh: 0.2
+    glyph: "▲"
+    color: yellow
+    note: "Cooktop and oven together."
+  - key: water_heater
+    label: "Water heater"
+    name_match: "Water Heater"
+    threshold_kw: 0.25
+    min_kwh: 0.05
+    secondary_kw: 1.5
+    secondary_label: "resistive backup"
+    glyph: "●"
+    color: violet
+    note: "Heat-pump water heater: ~0.3 kW compressor, ~4.5 kW resistive backup."
+  - key: fridge
+    label: "Refrigerator"
+    name_match: "Refrigerator"
+    threshold_kw: 0.05
+    min_kwh: 0.02
+    high_cycle: true
+    glyph: "★"
+    color: orange
+    note: "Compressor cycles."
+
+# /sessions: EV charging. space_ids are tried first; then the first circuit
+# whose name matches one of name_match (SQL ILIKE patterns).
+ev:
+  space_ids: []
+  name_match: ["%charge%", "%EV%"]
+  threshold_kw: 1.5
+
+# /duty: circuits that switch on and off by themselves. Per day: kWh,
+# minutes on and starts. A 10-minute bucket averaging on_kw or more is "on"
+# for its 10 minutes. With standby_w and on_w (the circuit's draw idle and
+# running, e.g. a burner's controls and its inducer), a bucket's on-time is
+# its energy above standby over the running draw instead, and days older
+# than SPAN's 10-minute history get it from their daily energy; on_kw then
+# defaults to halfway between them.
+duty_cycle:
+  - key: dehumidifier
+    label: "Dehumidifier"
+    name_match: "Dehumidifier"
+    on_kw: 0.2
+    glyph: "▼"
+  - key: furnace
+    label: "Furnace burner"
+    name_match: "Furnace"
+    standby_w: 12
+    on_w: 120
+    glyph: "◆"

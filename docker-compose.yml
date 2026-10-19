@@ -1,0 +1,76 @@
+# Quickstart: `docker compose up`, then open http://localhost:8000.
+#
+# With no panel, the `sample` service fills the database with a synthetic
+# house (scripts/sample_data.py) the first time, so every page has data.
+#
+# With a real panel, in a .env file beside this one:
+#   SPAN_SAMPLE_DATA=0          no sample data (start from an empty volume)
+#   SPAN_LIVE_SOURCE=ebus       /live from the panel (see README: registering)
+#   TZ=America/Chicago
+# put the credentials in ./config (credentials.json for SPAN's cloud,
+# span-api-credentials.json + span-ca.pem for the panel, circuits.yaml), and
+# run `docker compose --profile panel up -d` to start the 10-minute ingest.
+name: span-viewer
+
+x-app: &app
+  build: .
+  image: span-viewer:local
+  restart: unless-stopped
+  environment: &env
+    DATABASE_URL: postgresql://span_app:${POSTGRES_PASSWORD:-span}@db:5432/span
+    TZ: ${TZ:-America/New_York}
+    SPAN_LIVE_SOURCE: ${SPAN_LIVE_SOURCE:-off}
+    SPAN_HOST: ${SPAN_HOST:-}
+    MQTT_URL: ${MQTT_URL:-}
+    RATE_IMPORT_PER_KWH: ${RATE_IMPORT_PER_KWH:-}
+    RATE_EXPORT_CREDIT_PER_KWH: ${RATE_EXPORT_CREDIT_PER_KWH:-}
+    CIRCUITS_FILE: ${CIRCUITS_FILE:-/app/circuits.example.yaml}
+    SPAN_CLOUD_CREDS: /etc/span-viewer/credentials.json
+    SPAN_EBUS_CREDS: /etc/span-viewer/span-api-credentials.json
+    SPAN_LOCAL_CREDS: /etc/span-viewer/span-local-credentials.json
+  volumes:
+    - ./config:/etc/span-viewer:ro
+  depends_on:
+    db:
+      condition: service_healthy
+
+services:
+  db:
+    image: timescale/timescaledb:2.17.2-pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: span_app
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-span}
+      POSTGRES_DB: span
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/schema:/span-schema:ro
+      - ./docker/initdb/010-span-schema.sh:/docker-entrypoint-initdb.d/010-span-schema.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U span_app -d span"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  sample:
+    <<: *app
+    restart: "no"
+    command: ["sh", "-c", "[ \"${SPAN_SAMPLE_DATA:-1}\" = 0 ] || python scripts/sample_data.py --if-empty"]
+
+  app:
+    <<: *app
+    ports:
+      - "${PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      sample:
+        condition: service_completed_successfully
+
+  ingester:
+    <<: *app
+    profiles: ["panel"]
+    command: ["sh", "-c", "while true; do python -m ingester.ongoing; sleep 600; done"]
+
+volumes:
+  pgdata:

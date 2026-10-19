@@ -1,0 +1,262 @@
+{% extends "base.html" %}
+
+{% block title %}FHMM disaggregation — span-viewer{% endblock %}
+
+{% block content %}
+<section class="controls">
+  <form method="get" action="/attribute">
+    <label for="circuit">Circuit</label>
+    <select id="circuit" name="circuit" onchange="this.form.submit()">
+      <option value="">— pick a circuit —</option>
+      {% for c in circuits %}
+      <option value="{{ c.space_id }}" {% if circuit == c.space_id %}selected{% endif %}>{{ c.name }}</option>
+      {% endfor %}
+    </select>
+    <input type="hidden" name="hours" value="{{ hours }}">
+    <input type="hidden" name="min_step_w" value="{{ min_step_w }}">
+    <input type="hidden" name="obs_noise_w" value="{{ obs_noise_w }}">
+  </form>
+
+  <form method="get" action="/attribute">
+    <label for="hours">Window</label>
+    <select id="hours" name="hours" onchange="this.form.submit()">
+      {% for h in [6, 12, 24, 48, 72, 168] %}
+      <option value="{{ h }}" {% if hours == h %}selected{% endif %}>{% if h < 24 %}{{ h }} hours{% elif h == 24 %}24 hours{% else %}{{ (h / 24)|int }} days{% endif %}</option>
+      {% endfor %}
+    </select>
+    <input type="hidden" name="circuit" value="{{ circuit }}">
+    <input type="hidden" name="min_step_w" value="{{ min_step_w }}">
+    <input type="hidden" name="obs_noise_w" value="{{ obs_noise_w }}">
+  </form>
+
+  <form method="get" action="/attribute">
+    <label for="min_step_w">Min step</label>
+    <select id="min_step_w" name="min_step_w" onchange="this.form.submit()">
+      {% for w in [100, 200, 400] %}
+      <option value="{{ w }}" {% if min_step_w == w %}selected{% endif %}>≥ {{ w }} W</option>
+      {% endfor %}
+    </select>
+    <input type="hidden" name="circuit" value="{{ circuit }}">
+    <input type="hidden" name="hours" value="{{ hours }}">
+    <input type="hidden" name="obs_noise_w" value="{{ obs_noise_w }}">
+  </form>
+
+  <form method="get" action="/attribute">
+    <label for="obs_noise_w">Noise σ</label>
+    <select id="obs_noise_w" name="obs_noise_w" onchange="this.form.submit()">
+      {% for w in [25, 50, 100, 200] %}
+      <option value="{{ w }}" {% if obs_noise_w == w %}selected{% endif %}>{{ w }} W</option>
+      {% endfor %}
+    </select>
+    <input type="hidden" name="circuit" value="{{ circuit }}">
+    <input type="hidden" name="hours" value="{{ hours }}">
+    <input type="hidden" name="min_step_w" value="{{ min_step_w }}">
+  </form>
+</section>
+
+<section class="panel">
+  <h2>FHMM disaggregation — split a mixed circuit into appliances</h2>
+  <p class="panel-note">
+    Factorial Hidden Markov Model: each of the top 6 amplitude clusters
+    discovered by Phase 1 becomes a candidate appliance (2-state: off / on).
+    Viterbi inference finds the most likely on/off path for each appliance
+    given the observed total power signal. Best targets: mixed circuits like
+    <strong>Kitchen Counter Outlets &amp; Microwave</strong> or the
+    <strong>Sub panel - Under sink & upstairs & attic & smokes</strong>.
+  </p>
+  <p class="panel-note">
+    <strong>Caveats:</strong> the model is unsupervised — appliance labels
+    are heuristic, not ground truth. Similar-amplitude appliances may be
+    confused. Increase <em>noise σ</em> if the model is over-fitting micro-jitter;
+    decrease if it's missing genuine state changes.
+  </p>
+</section>
+
+{% if result %}
+  {% if result.error %}
+  <section class="panel">
+    <h2>Can't run yet</h2>
+    <p class="callout-warning">⏳ <strong>{{ result.error }}</strong></p>
+  </section>
+  {% else %}
+  <section class="tiles">
+    <div class="tile t-blue">
+      <div class="label">● Samples</div>
+      <div class="value">{{ '{:,}'.format(result.sample_count) }}</div>
+      <div class="sub">over {{ result.hours }} hr @ ~{{ '%.1f'|format(result.sample_period_s) }} s/sample</div>
+    </div>
+    <div class="tile t-violet">
+      <div class="label">◆ Candidate appliances</div>
+      <div class="value">{{ result.appliances|length }}</div>
+      <div class="sub">discovered from Phase 1 amplitude clusters</div>
+    </div>
+    <div class="tile t-yellow">
+      <div class="label">★ Observed kWh</div>
+      <div class="value">{{ '%.2f'|format(result.attribution.total_kwh) }}<span class="unit">kWh</span></div>
+      <div class="sub">∫ power · dt over window</div>
+    </div>
+    <div class="tile t-magenta">
+      <div class="label">▲ Residual</div>
+      <div class="value">{{ '%.2f'|format(result.attribution.residual_kwh) }}<span class="unit">kWh</span></div>
+      <div class="sub">{{ '%.0f'|format(result.attribution.residual_share_pct) }} % unattributed (always-on baseline)</div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>{{ result.space_name }} — inferred timeline</h2>
+    <p class="panel-note">
+      Observed signal (thin line) vs each appliance's inferred on/off state
+      stacked underneath. Pinch to zoom; drag the lower slider for finer
+      navigation. Re-renders responsively on rotate.
+    </p>
+    <div id="attribute-chart" class="chart-block"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Per-appliance attribution</h2>
+    <table class="rank">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Appliance (auto-named)</th>
+          <th class="num">µ</th>
+          <th class="num">On time</th>
+          <th class="num">kWh</th>
+          <th class="num">Share</th>
+          <th>Hypothesis</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in result.attribution.rows %}
+        <tr>
+          <td>{{ loop.index }}</td>
+          <td><strong>{{ r.amplitude_bin_w }} W</strong>{% if r.duration_label %} <span class="chip chip-{% if r.duration_label == 'short' %}yellow{% else %}violet{% endif %}">{{ r.duration_label }}</span>{% endif %}</td>
+          <td class="num">{{ '%.0f'|format(r.mu_w) }} W</td>
+          <td class="num">{% if r.on_minutes < 60 %}{{ '%.0f'|format(r.on_minutes) }} min{% else %}{{ '%.1f'|format(r.on_minutes / 60.0) }} hr{% endif %}</td>
+          <td class="num">{{ '%.3f'|format(r.kwh) }}</td>
+          <td class="num">{{ '%.0f'|format(r.share_pct) }}%</td>
+          <td><em>{{ r.hypothesis }}</em></td>
+        </tr>
+        {% endfor %}
+        <tr class="rank-total">
+          <td></td>
+          <td><strong>Residual / baseline</strong></td>
+          <td class="num muted">—</td>
+          <td class="num muted">—</td>
+          <td class="num">{{ '%.3f'|format(result.attribution.residual_kwh) }}</td>
+          <td class="num">{{ '%.0f'|format(result.attribution.residual_share_pct) }}%</td>
+          <td><em class="muted">always-on + unmodelled drift</em></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <script>
+    // Defer until base.html has registered the 'span-dark' theme.
+    document.addEventListener('DOMContentLoaded', () => {
+      if (typeof echarts === 'undefined') return;
+      const data = {{ result.chart | tojson }};
+      const el   = document.getElementById('attribute-chart');
+      if (!el || !data || !data.ts || data.ts.length === 0) return;
+
+      const chart = echarts.init(el, 'span-dark');
+
+      // Pair each appliance with a distinct CB-safe hue. Avoid red/green-only
+      // pairings (color-blind global preference). These mirror the chart
+      // palette in the registered span-dark theme.
+      const palette = ['#3b82f6', '#f59e0b', '#8b5cf6', '#ec4899',
+                       '#06b6d4', '#eab308'];
+
+      // Stacked appliance areas render UNDER the observed line. ECharts paints
+      // by series order, so push appliances first, observed last (with high z).
+      const series = data.states.map((s, i) => {
+        const color  = palette[i % palette.length];
+        // Convert 0/1 → 0/µ_w so each state-on segment occupies its actual
+        // amplitude band in the stack.
+        const scaled = s.series.map(v => v ? s.mu_w : 0);
+        return {
+          name:      s.name,
+          type:      'line',
+          step:      'end',
+          stack:     'inferred',
+          data:      scaled,
+          showSymbol: false,
+          smooth:     false,
+          areaStyle:  { color: color, opacity: 0.55 },
+          lineStyle:  { width: 0 },
+          z:          5,
+        };
+      });
+      series.push({
+        name:       'Observed',
+        type:       'line',
+        data:       data.observed,
+        showSymbol: false,
+        smooth:     false,
+        // Light foreground in dark theme; matches base.html FG (#e2e8f0).
+        // Don't hardcode — fetch from CSS var so a future theme change
+        // propagates automatically.
+        lineStyle:  {
+          width: 1.4,
+          color: getComputedStyle(document.documentElement)
+                   .getPropertyValue('--text').trim() || '#e2e8f0',
+        },
+        z: 100,
+      });
+
+      chart.setOption({
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: { type: 'cross' },
+          valueFormatter: v => v == null ? '—' : Math.round(v) + ' W',
+        },
+        legend: {
+          top: 0,
+          type: 'scroll',
+          textStyle: { fontSize: 11 },
+        },
+        grid: { left: 56, right: 20, top: 36, bottom: 56 },
+        xAxis: {
+          type: 'category',
+          data: data.ts.map(t => t.slice(11, 16)),
+          boundaryGap: false,
+          axisLabel: { hideOverlap: true, fontSize: 10 },
+        },
+        yAxis: {
+          type: 'value',
+          name: 'Watts',
+          nameLocation: 'middle',
+          nameGap: 40,
+          axisLabel: {
+            fontSize: 10,
+            formatter: v => v.toLocaleString(),
+          },
+        },
+        dataZoom: [
+          { type: 'inside' },
+          { type: 'slider', height: 18, bottom: 8 },
+        ],
+        series: series,
+      });
+      window.addEventListener('resize', () => chart.resize());
+    });
+  </script>
+  {% endif %}
+{% elif circuit %}
+  <section class="panel">
+    <p class="muted">Loading… if this doesn't render in a couple seconds, the FHMM probably timed out — try a shorter window.</p>
+  </section>
+{% else %}
+  <section class="panel">
+    <h2>Pick a circuit to disaggregate</h2>
+    <p class="panel-note">
+      Best targets are mixed-load circuits where multiple appliances share
+      one breaker — typically <strong>Kitchen Counter Outlets &amp; Microwave</strong>
+      (microwave / kettle / toaster / air fryer) or the
+      <strong>Sub panel - Under sink & upstairs & attic & smokes</strong> (under-sink + upstairs
+      grab bag). Dedicated circuits (fridge, dryer, oven, water heater) work
+      too but the Phase 1 <code>/appliances</code> view is already enough for those.
+    </p>
+  </section>
+{% endif %}
+{% endblock %}

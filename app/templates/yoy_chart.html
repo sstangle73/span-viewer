@@ -1,0 +1,286 @@
+{# Chart fragment — full page renders this once on initial load via {% include %},
+   HTMX swaps it on circuit change. The script tag carries the data payload;
+   yoy.html's `renderChart()` reads it to draw the ECharts charts. #}
+<h2>{{ circuit_name }} — monthly kWh, year over year</h2>
+<div id="chart-legend" class="chart-legend" aria-label="Year filter — click to toggle, long-press a year to solo it, or use the All/None buttons"></div>
+<div id="chart-kwh" style="width: 100%; height: 360px;"></div>
+<script type="application/json" id="chart-data">{{ months_json | safe }}</script>
+<style>
+  /* Custom legend toolbar — replaces ECharts's built-in legend so we can
+     wire up long-press-to-solo + All/None controls. */
+  .chart-legend {
+    display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center;
+    margin: 0.5rem 0 0.5rem;
+    padding: 0.4rem 0.5rem;
+    background: rgba(255,255,255,0.025);
+    border: 1px solid #334155;
+    border-radius: 6px;
+  }
+  .chart-legend button {
+    border: 2px solid var(--legend-c, #64748b);
+    background: transparent;
+    color: var(--fg, #e2e8f0);
+    padding: 0.2rem 0.65rem;
+    border-radius: 999px;
+    font-size: 0.82rem;
+    cursor: pointer;
+    transition: opacity 0.15s, background 0.15s, transform 0.1s;
+    font-family: inherit;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .chart-legend button.legend-item.active {
+    background: var(--legend-c);
+    color: #0b1220;
+    font-weight: 600;
+  }
+  .chart-legend button.legend-item:not(.active) {
+    opacity: 0.4;
+  }
+  .chart-legend button.legend-item:hover { transform: translateY(-1px); }
+  .chart-legend button.legend-item.pressing {
+    transform: scale(0.94);
+    box-shadow: 0 0 0 3px rgba(59,130,246,0.35);
+  }
+  .chart-legend button[data-act] {
+    border-color: #475569;
+    color: #94a3b8;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 0.18rem 0.55rem;
+  }
+  .chart-legend button[data-act]:hover {
+    background: rgba(255,255,255,0.05);
+    color: #e2e8f0;
+  }
+  .chart-legend .divider {
+    border-left: 1px solid #334155;
+    align-self: stretch;
+    margin: 0 0.2rem;
+  }
+  .chart-legend .hint {
+    color: #64748b; font-size: 0.7rem; margin-left: auto;
+  }
+</style>
+<script>
+  // CB-safe palette — distinct hues paired with marker shapes so the chart
+  // stays readable in grayscale and for red-green color blindness.
+  const YEAR_STYLE = {
+    2017: { color: '#7f7f7f', mark: '◇' },
+    2018: { color: '#94a3b8', mark: '◇' },
+    2019: { color: '#cbd5e1', mark: '◇' },
+    2020: { color: '#94a3b8', mark: '◇' },
+    2021: { color: '#cbd5e1', mark: '◇' },
+    2022: { color: '#94a3b8', mark: '◇' },
+    2023: { color: '#cbd5e1', mark: '◇' },
+    2024: { color: '#3b82f6', mark: '■' },  // blue, square
+    2025: { color: '#f59e0b', mark: '▲' },  // orange, triangle
+    2026: { color: '#ec4899', mark: '●' },  // magenta/pink, circle
+    2027: { color: '#8b5cf6', mark: '◆' },  // violet, diamond
+    2028: { color: '#eab308', mark: '★' },  // yellow, star
+  };
+
+  const monthLabels = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+  function styleFor(y) {
+    return YEAR_STYLE[y] || { color: '#64748b', mark: '◇' };
+  }
+
+  function chartOpts(yAxisName, yAxisFormatter) {
+    return {
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(255,255,255,0.04)' } },
+      },
+      // Built-in legend is hidden — we drive series visibility from our own
+      // HTML toolbar (#chart-legend) so it can support long-press solo.
+      legend: { show: false },
+      grid: { left: 56, right: 20, top: 16, bottom: 30 },
+      xAxis: { type: 'category', data: monthLabels },
+      yAxis: {
+        type: 'value', name: yAxisName,
+        nameTextStyle: { padding: [0, 0, 0, -40] },
+        axisLabel: { formatter: yAxisFormatter },
+      },
+    };
+  }
+
+  // ---- Custom legend toolbar -----------------------------------------------
+  // Drives series visibility on #chart-kwh.
+  // Click toggles a year; long-press (>=450ms) solos a year. The All / None
+  // buttons set the whole set in one action.
+
+  const LONG_PRESS_MS = 450;
+
+  function seriesNameFor(year) {
+    const s = styleFor(year);
+    return `${s.mark} ${year}`;
+  }
+
+  function _bothCharts() {
+    return ['chart-kwh']
+      .map(id => document.getElementById(id))
+      .filter(Boolean)
+      .map(el => echarts.getInstanceByDom(el))
+      .filter(Boolean);
+  }
+
+  function applyVisibility(year, visible) {
+    const name = seriesNameFor(year);
+    for (const chart of _bothCharts()) {
+      chart.dispatchAction({
+        type: visible ? 'legendSelect' : 'legendUnSelect',
+        name,
+      });
+    }
+  }
+
+  function setAllYears(visible) {
+    document.querySelectorAll('#chart-legend button.legend-item').forEach(btn => {
+      btn.classList.toggle('active', visible);
+      applyVisibility(btn.dataset.year, visible);
+    });
+  }
+
+  function soloYear(year) {
+    document.querySelectorAll('#chart-legend button.legend-item').forEach(btn => {
+      const isThis = btn.dataset.year === year;
+      btn.classList.toggle('active', isThis);
+      applyVisibility(btn.dataset.year, isThis);
+    });
+  }
+
+  function buildLegend(years) {
+    const container = document.getElementById('chart-legend');
+    if (!container) return;
+
+    const yearBtns = years.map(y => {
+      const s = styleFor(y);
+      return `<button type="button" data-year="${y}" class="legend-item active"`
+           + ` style="--legend-c: ${s.color}">${s.mark} ${y}</button>`;
+    }).join('');
+
+    container.innerHTML = `
+      <button type="button" data-act="all" title="Show all years">All</button>
+      <button type="button" data-act="none" title="Hide all years">None</button>
+      <span class="divider"></span>
+      ${yearBtns}
+      <span class="hint">long-press a year to solo</span>
+    `;
+
+    // All / None
+    container.querySelector('[data-act="all"]').addEventListener('click',
+      () => setAllYears(true));
+    container.querySelector('[data-act="none"]').addEventListener('click',
+      () => setAllYears(false));
+
+    // Per-year: click toggles, long-press solos.
+    container.querySelectorAll('button.legend-item').forEach(btn => {
+      let timer = null;
+      let didLongPress = false;
+
+      const startPress = () => {
+        didLongPress = false;
+        btn.classList.add('pressing');
+        timer = setTimeout(() => {
+          didLongPress = true;
+          soloYear(btn.dataset.year);
+          timer = null;
+        }, LONG_PRESS_MS);
+      };
+      const endPress = () => {
+        btn.classList.remove('pressing');
+        if (timer) { clearTimeout(timer); timer = null; }
+      };
+
+      // Click — but only if a long-press didn't already fire.
+      btn.addEventListener('click', (e) => {
+        if (didLongPress) {
+          didLongPress = false;
+          e.preventDefault();
+          return;
+        }
+        const v = !btn.classList.contains('active');
+        btn.classList.toggle('active', v);
+        applyVisibility(btn.dataset.year, v);
+      });
+
+      btn.addEventListener('mousedown', startPress);
+      btn.addEventListener('mouseup',   endPress);
+      btn.addEventListener('mouseleave', endPress);
+      btn.addEventListener('touchstart', (e) => { startPress(); }, { passive: true });
+      btn.addEventListener('touchend',   (e) => {
+        endPress();
+        if (didLongPress) e.preventDefault();  // suppress synthetic click on mobile
+      });
+      btn.addEventListener('touchcancel', endPress);
+    });
+  }
+
+  function renderChart() {
+    const months = JSON.parse(document.getElementById('chart-data').textContent);
+
+    // --- Top chart: kWh lines, one series per year -------------------------
+    // Lines (not bars) because the user has up to 10 years overlaid and bar
+    // grouping gets unreadable past ~3 years. Each year gets the same
+    // glyph-mapped on-chart marker as its legend label so you can follow a
+    // single line by either color OR shape (the CB-safe pairing).
+    const SYMBOL_FOR_MARK = {
+      '◇': 'diamond', '◆': 'diamond',
+      '■': 'rect',
+      '▲': 'triangle',
+      '●': 'circle',
+      '★': 'pin',
+    };
+    const yearsKwh = [...new Set(months.map(m => m.year))].sort();
+    const kwhSeries = yearsKwh.map(y => {
+      const data = Array(12).fill(null);
+      for (const m of months) {
+        if (m.year === y) data[m.month - 1] = Number(m.kwh.toFixed(2));
+      }
+      const s = styleFor(y);
+      return {
+        name: seriesNameFor(y),
+        type: 'line',
+        data: data,
+        symbol: SYMBOL_FOR_MARK[s.mark] || 'circle',
+        symbolSize: 6,
+        lineStyle: { color: s.color, width: 1.5 },
+        itemStyle: { color: s.color },
+        emphasis: { focus: 'series' },
+        connectNulls: false,
+      };
+    });
+
+    const kwhEl = document.getElementById('chart-kwh');
+    if (kwhEl) {
+      const existing = echarts.getInstanceByDom(kwhEl);
+      if (existing) existing.dispose();
+      const chart = echarts.init(kwhEl, 'span-dark');
+      chart.setOption({
+        ...chartOpts('kWh', '{value}'),
+        tooltip: { ...chartOpts('kWh', '{value}').tooltip,
+                   valueFormatter: v => v == null ? '—' : `${v.toFixed(0)} kWh` },
+        series: kwhSeries,
+      });
+    }
+
+    // --- Build the shared legend AFTER charts exist so dispatchAction works.
+    const allYears = [...new Set(yearsKwh)].sort();
+    buildLegend(allYears);
+
+    // Resize hook — one for both charts.
+    if (!window._spanResizeHook) {
+      window._spanResizeHook = () => {
+        for (const id of ['chart-kwh']) {
+          const el = document.getElementById(id);
+          if (!el) continue;
+          const inst = echarts.getInstanceByDom(el);
+          if (inst) inst.resize();
+        }
+      };
+      window.addEventListener('resize', window._spanResizeHook);
+    }
+  }
+</script>

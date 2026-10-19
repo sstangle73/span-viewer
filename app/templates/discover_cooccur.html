@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block title %}Cluster co-occurrence — span-viewer{% endblock %}
+
+{% block content %}
+<section class="pickers">
+  {% for d in [3, 7, 14, 30] %}
+    <a class="pill {% if days == d %}active{% endif %}" href="/discover/cooccur?days={{ d }}&min_events={{ min_events }}">Last {{ d }} days</a>
+  {% endfor %}
+  <span class="pill-sep"></span>
+  {% for n in [3, 5, 10] %}
+    <a class="pill {% if min_events == n %}active{% endif %}" href="/discover/cooccur?days={{ days }}&min_events={{ n }}">≥ {{ n }} events</a>
+  {% endfor %}
+</section>
+
+<section class="panel">
+  <h2>Cluster co-occurrence — which loads run together?</h2>
+  <p style="font-size: 0.85rem; color: var(--muted); margin: 0 0 0.5rem;">
+    For every pair of clusters on <em>different</em> circuits, computes how
+    often they're both active in the same minute. <strong>Lift &gt; 1.5</strong>
+    means they co-occur more than chance — useful for confirming Phase 1
+    cluster hypotheses (e.g. an "850 W" cluster on outlet A co-occurring
+    strongly with a "200 W" cluster on outlet B → both probably belong to
+    the same air conditioner).
+  </p>
+  <p style="font-size: 0.75rem; color: var(--muted); margin: 0;">
+    <strong>Support_A</strong> = fraction of minutes A is active.
+    <strong>Both</strong> = minutes both are active simultaneously.
+    <strong>Lift</strong> = observed / (support_A × support_B). 1.0 means
+    independent; higher means correlated.
+  </p>
+</section>
+
+{% if pairs %}
+<section class="panel">
+  <h2>Pairs above lift = 1.5 ({{ pairs|length }} found)</h2>
+  <table class="rank">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Circuit A</th>
+        <th class="num">Amp A</th>
+        <th>Circuit B</th>
+        <th class="num">Amp B</th>
+        <th class="num">Support A</th>
+        <th class="num">Support B</th>
+        <th class="num">Both</th>
+        <th class="num">Lift</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in pairs %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td><a href="/discover/cluster?circuit={{ p.a.space_id }}&amplitude={{ p.a.amp_bin_w }}{% if p.a.duration_label %}&duration={{ p.a.duration_label }}{% endif %}&days=30">{{ p.a.space_name }}</a>
+            <br><em style="font-size: 0.75rem; color: var(--muted);">{{ p.a.hypothesis }}</em></td>
+        <td class="num">{{ p.a.amp_bin_w }} W</td>
+        <td><a href="/discover/cluster?circuit={{ p.b.space_id }}&amplitude={{ p.b.amp_bin_w }}{% if p.b.duration_label %}&duration={{ p.b.duration_label }}{% endif %}&days=30">{{ p.b.space_name }}</a>
+            <br><em style="font-size: 0.75rem; color: var(--muted);">{{ p.b.hypothesis }}</em></td>
+        <td class="num">{{ p.b.amp_bin_w }} W</td>
+        <td class="num">{{ '%.1f'|format(p.support_a * 100) }}%</td>
+        <td class="num">{{ '%.1f'|format(p.support_b * 100) }}%</td>
+        <td class="num">{{ p.minutes_both }} min<br><span style="font-size:0.7rem;color:var(--muted)">{{ '%.1f'|format(p.support_both * 100) }}%</span></td>
+        <td class="num"><strong>{{ '%.1f'|format(p.lift) }}×</strong></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% else %}
+<section class="panel">
+  <h2>No co-occurring cluster pairs found</h2>
+  <p style="color: var(--muted);">
+    No (A, B) pair on different circuits had lift ≥ 1.5 with at least 5 minutes
+    of simultaneous activity in the last {{ days }} day{% if days > 1 %}s{% endif %}.
+    Either the data window is too short (try ≥ 14 days), the cluster threshold
+    is too high (try min_events = 3), or there genuinely aren't any
+    correlated loads — which is normal for a quiet home.
+  </p>
+</section>
+{% endif %}
+{% endblock %}

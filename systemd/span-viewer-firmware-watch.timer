@@ -1,0 +1,13 @@
+[Unit]
+Description=span-viewer SPAN panel firmware watcher (timer)
+
+[Timer]
+# Hourly at :47, an odd offset clear of the ingest timer's :03/:13/... slots.
+# Firmware bumps are rare; hourly is only about not learning of one from a
+# broken /live page.
+OnCalendar=*:47
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

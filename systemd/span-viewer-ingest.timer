@@ -1,0 +1,16 @@
+[Unit]
+Description=span-viewer 10-min cloud ingest (timer)
+
+[Timer]
+# Fire at :03, :13, :23, :33, :43, :53 of every hour. The +3 minutes gives
+# SPAN's cloud time to settle the most recent 10-min bucket (panel-to-cloud
+# lag is ~10-15 min, so the run at HH:03 picks up the bucket that closed
+# at HH:00).
+OnCalendar=*:03/10
+# If the machine was off when a fire was scheduled, run it on next boot.
+Persistent=true
+# Tiny jitter so we don't slam SPAN's API every time on the second.
+RandomizedDelaySec=15
+
+[Install]
+WantedBy=timers.target

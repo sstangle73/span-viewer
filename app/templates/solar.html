@@ -1,0 +1,467 @@
+{% extends "base.html" %}
+
+{% block title %}Solar dashboard — span-viewer{% endblock %}
+
+{% block content %}
+{# ---- Headline stat tiles ---- #}
+<section class="tiles">
+  <div class="tile t-orange">
+    <div class="label">▲ Lifetime produced</div>
+    <div class="value">{{ '{:,.0f}'.format(overview.lifetime.produced) }}<span class="unit">kWh</span></div>
+    <div class="sub">since panel commissioning (~Apr 2024)</div>
+  </div>
+  <div class="tile t-blue">
+    <div class="label">● Consumed by house</div>
+    <div class="value">{{ '{:,.0f}'.format(overview.lifetime.consumed) }}<span class="unit">kWh</span></div>
+    <div class="sub">{{ '%.1f%%'|format(overview.lifetime.self_pct) }} self-consumption</div>
+  </div>
+  <div class="tile t-magenta">
+    <div class="label">◆ Exported to grid</div>
+    <div class="value">{{ '{:,.0f}'.format(overview.lifetime.exported) }}<span class="unit">kWh</span></div>
+    <div class="sub">solar → grid (net-metering credit)</div>
+  </div>
+  <div class="tile t-yellow">
+    <div class="label">★ Best day ever</div>
+    <div class="value">{{ '%.1f'|format(overview.best_day.produced) }}<span class="unit">kWh</span></div>
+    <div class="sub">
+      {% if overview.best_day.date %}
+        <a href="/day?date={{ overview.best_day.date }}&circuit=whole_house">{{ overview.best_day.date }}</a>
+      {% endif %}
+    </div>
+  </div>
+  <div class="tile t-violet">
+    <div class="label">This month so far</div>
+    <div class="value">{{ '%.0f'|format(overview.this_month.produced) }}<span class="unit">kWh</span></div>
+    <div class="sub">
+      consumed {{ '%.0f'|format(overview.this_month.consumed) }} · exported {{ '%.0f'|format(overview.this_month.exported) }}
+    </div>
+  </div>
+  <div class="tile t-violet">
+    <div class="label">Last month</div>
+    <div class="value">{{ '%.0f'|format(overview.last_month.produced) }}<span class="unit">kWh</span></div>
+    <div class="sub">
+      consumed {{ '%.0f'|format(overview.last_month.consumed) }} · exported {{ '%.0f'|format(overview.last_month.exported) }}
+    </div>
+  </div>
+</section>
+
+<div class="grid-2">
+  {# ---- Where each produced kWh went ---- #}
+  <section class="panel">
+    <h2>Where each kWh of solar went, by month</h2>
+    <div id="dest-chart" style="width: 100%; height: 320px;"></div>
+    <p style="font-size: 0.8rem; color: var(--muted); margin: 0.5rem 0 0;">
+      ● blue = consumed by the house. ◆ magenta = exported to grid.
+      Sum = total produced.
+    </p>
+  </section>
+
+  {# ---- Where each consumed kWh came from (existing view) ---- #}
+  <section class="panel">
+    <h2>Where each kWh of house consumption came from</h2>
+    <div id="source-chart" style="width: 100%; height: 320px;"></div>
+    <p style="font-size: 0.8rem; color: var(--muted); margin: 0.5rem 0 0;">
+      ▲ yellow = from solar. ■ blue = from grid. ● magenta line = solar self-consumption %
+      (<code>building_from_solar / building_total</code>).
+    </p>
+  </section>
+</div>
+
+{# ---- Multi-year solar production YoY ---- #}
+<section class="panel">
+  <h2>Solar production, year over year</h2>
+  <div id="yoy-chart" style="width: 100%; height: 380px;"></div>
+</section>
+
+<div class="grid-2">
+  {# ---- Production calendar heatmap ---- #}
+  <section class="panel" id="heatmap">
+    <h2>Daily production — {{ selected_year }}</h2>
+    <div class="pickers" style="margin-bottom: 0.5rem;">
+      {% for y in years_with_solar %}
+        <a class="pill {% if y == selected_year %}active{% endif %}" href="/solar?year={{ y }}&window={{ window }}&weeks={{ weeks }}#heatmap">{{ y }}</a>
+      {% endfor %}
+    </div>
+    <div id="solar-heatmap" style="width: 100%; height: 280px;"></div>
+    <p style="font-size: 0.8rem; color: var(--muted); margin: 0.5rem 0 0;">
+      ■ blue (low) → ● magenta (high). Click a day to drill in.
+    </p>
+  </section>
+
+  {# ---- Duck curve ---- #}
+  <section class="panel" id="duck">
+    <h2>Average production by hour-of-day</h2>
+    <div class="pickers" style="margin-bottom: 0.5rem;">
+      {% for w in [4, 12, 24] %}
+        <a class="pill {% if weeks == w %}active{% endif %}" href="/solar?year={{ selected_year }}&window={{ window }}&weeks={{ w }}#duck">Last {{ w }} weeks</a>
+      {% endfor %}
+    </div>
+    <div id="duck-chart" style="width: 100%; height: 280px;"></div>
+    <p style="font-size: 0.8rem; color: var(--muted); margin: 0.5rem 0 0;">
+      The recognizable solar bell — zero overnight, ramp from sunrise, peak around solar noon, taper at sunset. Computed from rows at hourly resolution or finer.
+    </p>
+  </section>
+</div>
+
+{# ---- Best solar days ---- #}
+<section class="panel" id="best">
+  <h2>Best solar days</h2>
+  <div class="pickers" style="margin-bottom: 0.5rem;">
+    {% for w in ['30d', '90d', '12mo', 'all'] %}
+      <a class="pill {% if window == w %}active{% endif %}" href="/solar?year={{ selected_year }}&window={{ w }}&weeks={{ weeks }}#best">
+        {% if w == '30d' %}30 days{% elif w == '90d' %}90 days{% elif w == '12mo' %}12 months{% else %}All time{% endif %}
+      </a>
+    {% endfor %}
+  </div>
+  <table class="rank">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Date</th>
+        <th class="num">Produced</th>
+        <th class="num">Consumed</th>
+        <th class="num">Exported</th>
+        <th class="bar"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% set max_p = best_days[0].produced if best_days else 1 %}
+      {% for d in best_days %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td><a href="/day?date={{ d.date }}&circuit=whole_house">{{ d.date }}</a></td>
+        <td class="num">{{ '%.1f'|format(d.produced) }}</td>
+        <td class="num">{{ '%.1f'|format(d.consumed) }}</td>
+        <td class="num">{{ '%.1f'|format(d.exported) }}</td>
+        <td class="bar"><span class="bar-fill" style="width: {{ (d.produced / max_p * 100)|round(1) }}%; background: #f59e0b;"></span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+{# ---- Year-end production projection ---- #}
+<section class="panel" id="long-range">
+  <h2>Year-end projection</h2>
+  <div class="tiles">
+    <div class="tile t-yellow">
+      <div class="label">★ {{ year_end.year }} solar — YTD</div>
+      <div class="value">{{ '{:,.0f}'.format(year_end.ytd_kwh) }}<span class="unit">kWh</span></div>
+      <div class="sub">through {{ year_end.today }}</div>
+    </div>
+    <div class="tile t-orange">
+      <div class="label">▲ {{ year_end.year }} projected year-end</div>
+      <div class="value">{{ '{:,.0f}'.format(year_end.projected_total) }}<span class="unit">kWh</span></div>
+      <div class="sub">YTD + remaining months at historical pace</div>
+    </div>
+    {% for y, total in year_end.prior_totals.items() %}
+      {% if y != year_end.year and total > 100 %}
+      <div class="tile t-blue">
+        <div class="label">● {{ y }} actual</div>
+        <div class="value">{{ '{:,.0f}'.format(total) }}<span class="unit">kWh</span></div>
+        <div class="sub">
+          {% set delta = (year_end.projected_total - total) / total * 100 %}
+          projected vs {{ y }}: {% if delta >= 0 %}+{% endif %}{{ '%.1f'|format(delta) }}%
+        </div>
+      </div>
+      {% endif %}
+    {% endfor %}
+  </div>
+
+</section>
+
+{# ---- Daily produced vs consumed scatter ---- #}
+<section class="panel">
+  <h2>Daily produced vs consumed</h2>
+  <div id="scatter-chart" style="width: 100%; height: 480px;"></div>
+  <p style="font-size: 0.8rem; color: var(--muted); margin: 0.5rem 0 0;">
+    One dot per day. X = solar produced, Y = house consumed.
+    Color = month-of-year (blue→pink seasonal ramp).
+    The dashed diagonal is the break-even line — points below = solar produced more than the house used (net exporter that day),
+    points above = imported from grid. Click any dot to drill into that day.
+  </p>
+</section>
+
+{# ---- Capacity factor ---- #}
+<section class="panel">
+  <h2>Capacity utilisation</h2>
+  <div class="tiles" style="margin-bottom: 0.5rem;">
+    <div class="tile t-yellow">
+      <div class="label">Peak observed power</div>
+      <div class="value">{{ '%.2f'|format(cf.peak_kw) }}<span class="unit">kW</span></div>
+      <div class="sub">max instantaneous (10-min)</div>
+    </div>
+    <div class="tile t-orange">
+      <div class="label">Capacity factor</div>
+      <div class="value">{% if cf.capacity_factor_pct %}{{ '%.1f%%'|format(cf.capacity_factor_pct) }}{% else %}—{% endif %}</div>
+      <div class="sub">avg power / peak × hours</div>
+    </div>
+  </div>
+  <p style="font-size: 0.8rem; color: var(--muted); margin: 0;">
+    Without a nameplate kW input we use the highest observed 10-min bucket
+    as a proxy for rated capacity. Real residential rooftop CFs land
+    ~14–22% in temperate climates; lower means the panels spend more of
+    the year well below peak (cloudy / off-axis sun / curtailed).
+  </p>
+</section>
+
+{# ---- Full monthly table at the bottom ---- #}
+<section class="panel">
+  <h2>Monthly table</h2>
+  <table class="rank">
+    <thead>
+      <tr>
+        <th>Month</th>
+        <th class="num">Produced</th>
+        <th class="num">Consumed</th>
+        <th class="num">Exported</th>
+        <th class="num">Self %</th>
+        <th class="num">House offset %</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for m in months|reverse %}
+      <tr>
+        <td>{{ m.month }}</td>
+        <td class="num">{{ '%.0f'|format(m.produced) }}</td>
+        <td class="num">{{ '%.0f'|format(m.consumed) }}</td>
+        <td class="num">{{ '%.0f'|format(m.exported) }}</td>
+        <td class="num">{{ '%.1f%%'|format(m.self_pct) }}</td>
+        <td class="num">{{ '%.1f%%'|format(m.offset_pct) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<script type="application/json" id="months-data">{{ months_json | safe }}</script>
+<script type="application/json" id="yoy-data">{{ yoy_json | safe }}</script>
+<script type="application/json" id="daily-data">{{ daily_json | safe }}</script>
+<script type="application/json" id="duck-data">{{ duck_json | safe }}</script>
+<script type="application/json" id="scatter-data">{{ scatter_json | safe }}</script>
+
+<script>
+  // Series colors used across multiple charts on this page.
+  const SOLAR = '#f59e0b'; const GRID = '#3b82f6'; const PINK = '#ec4899';
+
+  window.addEventListener('load', () => {
+    if (typeof echarts === 'undefined') return;
+
+    const months = JSON.parse(document.getElementById('months-data').textContent);
+
+    // ---- Destinations chart ----
+    {
+      const chart = echarts.init(document.getElementById('dest-chart'), 'span-dark');
+      chart.setOption({
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' },
+          valueFormatter: v => v == null ? '—' : `${v.toFixed(1)} kWh` },
+        legend: { top: 0 },
+        grid: { left: 56, right: 20, top: 40, bottom: 60 },
+        xAxis: { type: 'category', data: months.map(m => m.month.slice(0,7)),
+          axisLabel: { rotate: 35 } },
+        yAxis: { type: 'value', name: 'kWh' },
+        series: [
+          { name: '● Used by house', type: 'bar', stack: 'dst',
+            data: months.map(m => +m.consumed.toFixed(1)),
+            itemStyle: { color: GRID } },
+          { name: '◆ Exported',      type: 'bar', stack: 'dst',
+            data: months.map(m => +m.exported.toFixed(1)),
+            itemStyle: { color: PINK } },
+        ],
+      });
+      window.addEventListener('resize', () => chart.resize());
+    }
+
+    // ---- Source chart (consumption side, existing view) ----
+    {
+      const chart = echarts.init(document.getElementById('source-chart'), 'span-dark');
+      chart.setOption({
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' },
+          valueFormatter: v => v == null ? '—' : `${v.toFixed(1)} kWh` },
+        legend: { top: 0 },
+        grid: { left: 56, right: 56, top: 40, bottom: 60 },
+        xAxis: { type: 'category', data: months.map(m => m.month.slice(0,7)),
+          axisLabel: { rotate: 35 } },
+        yAxis: [
+          { type: 'value', name: 'kWh' },
+          { type: 'value', name: 'Solar %', min: 0, max: 100,
+            axisLabel: { formatter: '{value}%' }, splitLine: { show: false } },
+        ],
+        series: [
+          { name: '▲ From solar', type: 'bar', stack: 'src',
+            data: months.map(m => +m.consumed.toFixed(1)),
+            itemStyle: { color: SOLAR } },
+          { name: '■ From grid',  type: 'bar', stack: 'src',
+            data: months.map(m => +m.from_grid.toFixed(1)),
+            itemStyle: { color: GRID } },
+          { name: '● Solar %', type: 'line', yAxisIndex: 1,
+            data: months.map(m => +m.self_pct.toFixed(1)),
+            smooth: true, symbol: 'circle', symbolSize: 5,
+            lineStyle: { color: PINK, width: 2 },
+            itemStyle: { color: PINK } },
+        ],
+      });
+      window.addEventListener('resize', () => chart.resize());
+    }
+
+    // ---- YoY production chart ----
+    {
+      const yoy = JSON.parse(document.getElementById('yoy-data').textContent);
+      const years = [...new Set(yoy.map(r => r.year))].sort();
+      const monthLabels = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      // Same CB-safe palette as /yoy
+      const STYLE = {
+        2024: { color: '#3b82f6', mark: '■' },
+        2025: { color: '#f59e0b', mark: '▲' },
+        2026: { color: '#ec4899', mark: '●' },
+        2027: { color: '#8b5cf6', mark: '◆' },
+      };
+      const series = years.map(y => {
+        const data = Array(12).fill(null);
+        for (const r of yoy) if (r.year === y) data[r.month - 1] = Math.round(r.produced);
+        const s = STYLE[y] || { color: '#64748b', mark: '◇' };
+        return { name: `${s.mark} ${y}`, type: 'bar', data, itemStyle: { color: s.color } };
+      });
+
+      const chart = echarts.init(document.getElementById('yoy-chart'), 'span-dark');
+      chart.setOption({
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' },
+          valueFormatter: v => v == null ? '—' : `${v} kWh` },
+        legend: { top: 0 },
+        grid: { left: 60, right: 20, top: 40, bottom: 30 },
+        xAxis: { type: 'category', data: monthLabels },
+        yAxis: { type: 'value', name: 'kWh' },
+        series: series,
+      });
+      window.addEventListener('resize', () => chart.resize());
+    }
+
+    // ---- Solar production calendar heatmap ----
+    {
+      const daily = JSON.parse(document.getElementById('daily-data').textContent);
+      const vals = daily.map(r => r.kwh).filter(v => v > 0);
+      const lo = vals.length ? Math.min(...vals) : 0;
+      const hi = vals.length ? Math.max(...vals) : 1;
+      const data = daily.map(r => [r.date, +r.kwh.toFixed(2)]);
+
+      const chart = echarts.init(document.getElementById('solar-heatmap'), 'span-dark');
+      chart.setOption({
+        tooltip: {
+          formatter: p => `${p.data[0]}<br/><strong>${p.data[1].toFixed(1)} kWh</strong>`,
+        },
+        visualMap: {
+          min: lo, max: hi, calculable: true, orient: 'horizontal',
+          left: 'center', bottom: 0,
+          inRange: { color: ['#1e3a8a', '#3b82f6', '#facc15', '#f59e0b', '#ec4899'] },
+        },
+        calendar: {
+          range: {{ selected_year }},
+          left: 50, right: 20, top: 10, bottom: 50,
+          cellSize: ['auto', 12],
+          monthLabel: { nameMap: 'EN' },
+          dayLabel:   { nameMap: 'EN', firstDay: 0 },
+        },
+        series: [{ type: 'heatmap', coordinateSystem: 'calendar', data: data }],
+      });
+      chart.on('click', p => {
+        if (p.data && p.data[0]) {
+          window.location.href = `/day?date=${p.data[0]}&circuit=whole_house`;
+        }
+      });
+      window.addEventListener('resize', () => chart.resize());
+    }
+
+    // ---- CB-safe month palette (sequential through seasons) ----
+    // Distinct hue + monotonic lightness: works in grayscale + protan/deutan.
+    const MONTH_COLOR = [
+      '#1e3a8a', '#1d4ed8', '#0ea5e9', '#06b6d4',   // Jan-Apr (cool blues / cyan)
+      '#fde047', '#facc15', '#f59e0b', '#f97316',   // May-Aug (yellows to orange; no greens)
+      '#ec4899', '#d946ef', '#a855f7', '#6366f1',   // Sep-Dec (magenta to indigo)
+    ];
+
+    // ---- Daily produced-vs-consumed scatter ----
+    {
+      const data = JSON.parse(document.getElementById('scatter-data').textContent);
+      // Group by month so the legend shows one entry per month with its colour
+      const monthLabel = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      const seriesByMonth = {};
+      for (const d of data) {
+        const m = d.month;
+        if (!seriesByMonth[m]) seriesByMonth[m] = [];
+        seriesByMonth[m].push([+d.produced.toFixed(2), +d.consumed.toFixed(2), d.date]);
+      }
+
+      // Max for the y=x reference line.
+      const allVals = data.flatMap(d => [d.produced, d.consumed]);
+      const maxV = Math.max(...allVals, 10);
+
+      const series = Object.keys(seriesByMonth).sort((a, b) => +a - +b).map(m => ({
+        name: monthLabel[+m - 1],
+        type: 'scatter',
+        data: seriesByMonth[m],
+        symbolSize: 8,
+        itemStyle: { color: MONTH_COLOR[+m - 1], opacity: 0.75,
+                      borderColor: 'rgba(255,255,255,0.2)', borderWidth: 0.5 },
+      }));
+      // Add the diagonal reference line.
+      series.push({
+        name: 'break-even (y = x)',
+        type: 'line',
+        data: [[0, 0], [maxV, maxV]],
+        showSymbol: false,
+        lineStyle: { color: '#94a3b8', type: 'dashed', width: 1 },
+        tooltip: { show: false },
+      });
+
+      const chart = echarts.init(document.getElementById('scatter-chart'), 'span-dark');
+      chart.setOption({
+        tooltip: {
+          trigger: 'item',
+          formatter: (p) => {
+            if (p.seriesType !== 'scatter') return '';
+            return `<strong>${p.data[2]}</strong><br/>Produced: ${p.data[0]} kWh<br/>Consumed: ${p.data[1]} kWh`;
+          },
+        },
+        legend: { top: 0, type: 'scroll' },
+        grid: { left: 60, right: 20, top: 40, bottom: 50 },
+        xAxis: { type: 'value', name: 'Produced (kWh)', nameLocation: 'middle', nameGap: 30 },
+        yAxis: { type: 'value', name: 'Consumed (kWh)', nameLocation: 'middle', nameGap: 40 },
+        series,
+      });
+      chart.on('click', p => {
+        if (p.componentType === 'series' && p.seriesType === 'scatter' && p.data[2]) {
+          window.location.href = `/day?date=${p.data[2]}&circuit=whole_house`;
+        }
+      });
+      window.addEventListener('resize', () => chart.resize());
+    }
+
+    // ---- Duck curve ----
+    {
+      const duck = JSON.parse(document.getElementById('duck-data').textContent);
+      const byHour = Object.fromEntries(duck.map(r => [r.hour, r.avg_kwh]));
+      const hours = Array.from({length: 24}, (_, h) => h);
+      const labels = hours.map(h => String(h).padStart(2,'0') + ':00');
+      const data = hours.map(h => +(byHour[h] ?? 0).toFixed(3));
+
+      const chart = echarts.init(document.getElementById('duck-chart'), 'span-dark');
+      chart.setOption({
+        tooltip: { trigger: 'axis',
+          valueFormatter: v => v == null ? '—' : `${v.toFixed(2)} kWh` },
+        grid: { left: 56, right: 20, top: 30, bottom: 40 },
+        xAxis: { type: 'category', data: labels },
+        yAxis: { type: 'value', name: 'kWh / hour' },
+        series: [{
+          type: 'line',
+          data, smooth: true,
+          areaStyle: { color: 'rgba(245,158,11,0.25)' },
+          lineStyle: { color: SOLAR, width: 2 },
+          itemStyle: { color: SOLAR },
+          symbol: 'circle', symbolSize: 5,
+        }],
+      });
+      window.addEventListener('resize', () => chart.resize());
+    }
+  });
+</script>
+{% endblock %}

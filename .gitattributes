@@ -1,0 +1,13 @@
+# Shell scripts must stay LF — they're checked out on Windows but executed on
+# the Debian LXC via scp+ssh, and bash chokes on \r line endings.
+*.sh        text eol=lf
+*.bash      text eol=lf
+
+# Same for any SQL we run server-side
+*.sql       text eol=lf
+
+# Python — also keep LF for cross-platform consistency
+*.py        text eol=lf
+
+# Everything else gets the default normalization
+*           text=auto

@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+
+{% block title %}EV charging sessions — span-viewer{% endblock %}
+
+{% block content %}
+<section class="pickers">
+  {% for d in [30, 90, 180, 365] %}
+    <a class="pill {% if days == d %}active{% endif %}" href="/sessions?days={{ d }}#table">Last {{ d }} days</a>
+  {% endfor %}
+  <a class="pill" href="/export/sessions?days={{ days }}&fmt=csv" title="Download as CSV">⇩ CSV</a>
+  <a class="pill" href="/export/sessions?days={{ days }}&fmt=json" title="Download as JSON">⇩ JSON</a>
+</section>
+
+{% if sessions %}
+{% set total_kwh = sessions | sum(attribute='kwh') %}
+{% set total_min = sessions | sum(attribute='duration_min') %}
+{% set space_name = sessions[0].space_name %}
+
+<section class="tiles">
+  <div class="tile t-orange">
+    <div class="label">★ Sessions</div>
+    <div class="value">{{ sessions|length }}</div>
+    <div class="sub">last {{ days }} days · {{ space_name }}</div>
+  </div>
+  <div class="tile t-blue">
+    <div class="label">● Total energy delivered</div>
+    <div class="value">{{ '%.0f'|format(total_kwh) }}<span class="unit">kWh</span></div>
+    <div class="sub">avg {{ '%.1f'|format(total_kwh / sessions|length) }} kWh/session</div>
+  </div>
+  <div class="tile t-violet">
+    <div class="label">◆ Total charging time</div>
+    <div class="value">{{ '%.1f'|format(total_min / 60) }}<span class="unit">hr</span></div>
+    <div class="sub">avg {{ '%.0f'|format(total_min / sessions|length) }} min/session</div>
+  </div>
+  <div class="tile t-magenta">
+    <div class="label">▲ Peak draw observed</div>
+    <div class="value">{{ '%.1f'|format(sessions | map(attribute='peak_kw') | max) }}<span class="unit">kW</span></div>
+    <div class="sub">across {{ sessions|length }} sessions</div>
+  </div>
+</section>
+
+<section class="panel" id="table">
+  <h2>Charging sessions — {{ space_name }}</h2>
+  <p style="font-size: 0.8rem; color: var(--muted); margin: 0 0 0.75rem;">
+    A "session" is a contiguous run of 10-min buckets averaging ≥ 1.5 kW.
+    Gaps shorter than the bucket width count as the same session;
+    longer gaps (or any sub-threshold bucket) start a new one.
+    Click any date to drill into that day's curves.
+  </p>
+  <table class="rank">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Date</th>
+        <th>Start (local)</th>
+        <th>End (local)</th>
+        <th class="num">Duration</th>
+        <th class="num">kWh</th>
+        <th class="num">Avg kW</th>
+        <th class="num">Peak kW</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in sessions %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td><a href="/day?date={{ s.date }}&circuit={{ s.space_id }}">{{ s.date }}</a></td>
+        <td>{{ s.start[11:16] }}</td>
+        <td>{{ s.end[11:16] }}</td>
+        <td class="num">{% if s.duration_min < 60 %}{{ '%.0f'|format(s.duration_min) }} min{% else %}{{ '%.1f'|format(s.duration_min/60) }} hr{% endif %}</td>
+        <td class="num">{{ '%.2f'|format(s.kwh) }}</td>
+        <td class="num">{{ '%.2f'|format(s.avg_kw) }}</td>
+        <td class="num">{{ '%.2f'|format(s.peak_kw) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% else %}
+<section class="panel">
+  <h2>No EV charging sessions detected</h2>
+  <p style="color: var(--muted);">
+    No 10-min buckets averaging ≥ 1.5 kW found on the EV charger's circuit in
+    the last {{ days }} days. If you only just installed the L2 charger,
+    sessions will start appearing within an hour of the first charge.
+    If you expect sessions and see none, the candidate circuit might be named
+    differently — the detector matches any circuit whose name contains "Charge"
+    or "EV".
+  </p>
+</section>
+{% endif %}
+{% endblock %}

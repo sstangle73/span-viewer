@@ -1,0 +1,639 @@
+{% extends "base.html" %}
+
+{% block title %}Live — span-viewer{% endblock %}
+
+{% block content %}
+<section class="controls">
+  <div class="pickers" style="margin: 0; align-self: center; gap: 0.5rem; display: flex; flex-wrap: wrap;">
+    <span class="pill" id="live-status">connecting…</span>
+    <span class="pill" id="last-update">—</span>
+    <label class="pill" style="cursor: pointer;">
+      <input type="checkbox" id="pause-toggle" style="vertical-align: middle; margin-right: 0.3rem;">
+      Pause
+    </label>
+  </div>
+</section>
+
+<section class="tiles" id="summary-tiles">
+  <div class="tile t-yellow" id="tile-solar">
+    <div class="label">▲ Solar producing</div>
+    <div class="value">—</div>
+    <div class="sub">inferred from branches</div>
+  </div>
+  <div class="tile t-blue" id="tile-grid">
+    <div class="label">● Grid</div>
+    <div class="value">—</div>
+    <div class="sub">waiting…</div>
+  </div>
+  <div class="tile t-orange" id="tile-load">
+    <div class="label">■ House load</div>
+    <div class="value">—</div>
+    <div class="sub">all circuits + sub-panel</div>
+  </div>
+  <div class="tile t-violet" id="tile-share">
+    <div class="label">◆ Solar share</div>
+    <div class="value">—</div>
+    <div class="sub">% of right-now demand</div>
+  </div>
+  <div class="tile t-magenta" id="tile-phase">
+    <div class="label">◐ Phase balance</div>
+    <div class="value">—</div>
+    <div class="sub">A / B split</div>
+  </div>
+  <div class="tile" id="tile-mover" style="border-left: 3px solid #06b6d4;">
+    <div class="label">⚡ Recent change</div>
+    <div class="value">—</div>
+    <div class="sub">biggest mover in last 60 s</div>
+  </div>
+  <div class="tile" id="tile-session" style="border-left: 3px solid #fb7185;">
+    <div class="label">⏱ Energy this session</div>
+    <div class="value">—</div>
+    <div class="sub">since page load</div>
+  </div>
+  <div class="tile" id="tile-yesterday" style="border-left: 3px solid #a78bfa;">
+    <div class="label">↔ vs Yesterday</div>
+    <div class="value">—</div>
+    <div class="sub">same time, 24 h ago</div>
+  </div>
+  <div class="tile" id="tile-status">
+    <div class="label">Panel</div>
+    <div class="value" style="font-size: 1rem; line-height: 1.3; padding-top: 0.5rem;">—</div>
+    <div class="sub">—</div>
+  </div>
+</section>
+
+<section class="panel">
+  <h2><span id="chart-title">Last 5 minutes</span> · supply → demand</h2>
+  <div class="pickers" style="margin: 0.4rem 0 0.75rem 0;">
+    <a class="pill active" data-window="5m"  href="#">5 min</a>
+    <a class="pill"        data-window="1h"  href="#">1 hour</a>
+    <a class="pill"        data-window="6h"  href="#">6 hours</a>
+    <a class="pill"        data-window="24h" href="#">24 hours</a>
+  </div>
+  <div id="strip-chart" style="width: 100%; height: 320px;"></div>
+  <p style="font-size: 0.75rem; color: var(--muted); margin: 0.5rem 0 0;">
+    Stack reads as supply: ▲ yellow = solar, ● blue = grid import (when
+    needed). ■ orange line traces total house demand — when the stack
+    matches the line, all load is covered. When the orange line dips
+    below the yellow top, the gap is excess solar going to grid (shown
+    as a dashed area below zero). Backed by the
+    <code>panel_live</code> hypertable (25-h retention, downsampled to
+    ~100 points per zoom), so a refresh doesn't lose the rolling history.
+    Long-range flows are on <a href="/flows">/flows</a>.
+  </p>
+</section>
+
+<section class="panel">
+  <h2>Per-circuit, sorted by current power</h2>
+  <div id="circuit-list"><p style="color: var(--muted);">waiting for first snapshot…</p></div>
+  <p style="font-size: 0.75rem; color: var(--muted); margin: 0.5rem 0 0;">
+    <span style="color: #3b82f6;">■ blue = consuming</span> ·
+    <span style="color: #facc15;">▲ yellow = producing</span> (negative power, e.g. a
+    backfeeding solar circuit). Bar width is fraction of the largest |W|
+    in the snapshot. The "Sub panel - Under sink & upstairs & attic &
+    smokes" row is the feedthrough lug measurement — those downstream
+    circuits aren't individually visible to SPAN, so they roll up as a
+    single row.
+  </p>
+</section>
+
+<section class="panel">
+  <details>
+    <summary style="cursor: pointer; color: var(--muted);">Raw API response (debug)</summary>
+    <pre id="raw-dump" style="font-size: 0.7rem; color: var(--muted); overflow: auto; max-height: 320px;
+                              background: var(--bg); padding: 0.6rem; border-radius: 4px; margin-top: 0.6rem;">—</pre>
+  </details>
+</section>
+
+<script>
+(() => {
+  const POLL_MS     = 3000;
+  const HISTORY_LEN = 100;   // 100 * 3s = 5 min (only used in 5m mode)
+
+  // Zoom-window configuration. `refresh_ms` is how often the chart
+  // refetches /api/live/history when this window is active. The 5m
+  // window doesn't refetch — it appends each poll instead, keeping the
+  // chart in lockstep with the tile values.
+  const WINDOWS = {
+    '5m':  { label: 'Last 5 minutes',  refresh_ms: null,  fmt: 'hms' },
+    '1h':  { label: 'Last hour',       refresh_ms: 30000, fmt: 'hm'  },
+    '6h':  { label: 'Last 6 hours',    refresh_ms: 60000, fmt: 'hm'  },
+    '24h': { label: 'Last 24 hours',   refresh_ms: 120000, fmt: 'hm' },
+  };
+  let currentWindow = '5m';
+  let historyRefreshId = null;
+
+  const fmtW = (w) => {
+    if (w == null || isNaN(w)) return '—';
+    const abs = Math.abs(w);
+    if (abs >= 1000) return (w / 1000).toFixed(2) + ' kW';
+    return Math.round(w) + ' W';
+  };
+  const $ = (sel) => document.querySelector(sel);
+  const setText = (sel, txt) => { const el = $(sel); if (el) el.textContent = txt; };
+
+  // ---- Strip chart -----------------------------------------------------
+  const COLORS = {
+    grid:  '#3b82f6',   // blue ●
+    solar: '#facc15',   // yellow ▲
+    load:  '#f59e0b',   // orange ■
+  };
+
+  // Cost-rate constant for the load + grid tile sub-lines. Sourced from
+  // CURRENT_RATES in queries.py via _common_ctx so /live agrees with /yoy,
+  // /solar, /counterfactual etc. — change CURRENT_RATES (one place) when the
+  // rate moves and every page picks it up. Inlined as a constant so the
+  // 3-second poll loop doesn't touch the DB on every tick.
+  // The optional flat rate (config RATE_IMPORT_PER_KWH); null = kWh only.
+  const COST_PER_KWH = {{ rates.all_in_per_kwh if rates else 'null' }};
+
+  let chart = null;
+  const history = { ts: [], solar: [], gridImport: [], gridExport: [], load: [] };
+
+  function initChart() {
+    if (typeof echarts === 'undefined') return;
+    chart = echarts.init(document.getElementById('strip-chart'), 'span-dark');
+    chart.setOption({
+      tooltip: { trigger: 'axis', valueFormatter: (v) => v == null ? '—' : fmtW(v) },
+      legend: { top: 0, data: ['▲ Solar', '● Grid import', '● Grid export', '■ House load'] },
+      grid: { left: 60, right: 30, top: 35, bottom: 30 },
+      xAxis: { type: 'category', data: [], boundaryGap: false,
+               axisLabel: { interval: 'auto', hideOverlap: true } },
+      yAxis: { type: 'value', name: 'W',
+               axisLabel: { formatter: (v) => Math.round(v) } },
+      series: [
+        // Yellow solar area, stacked at the bottom of the supply.
+        { name: '▲ Solar',         type: 'line', stack: 'supply',
+          areaStyle: { color: 'rgba(250,204,21,0.50)' },
+          lineStyle: { color: COLORS.solar, width: 1 },
+          itemStyle: { color: COLORS.solar },
+          symbol: 'none', smooth: 0.1, data: [] },
+        // Blue grid-import area, stacked on top of solar. Top of the
+        // stack should equal the orange load line when not exporting.
+        { name: '● Grid import',   type: 'line', stack: 'supply',
+          areaStyle: { color: 'rgba(59,130,246,0.55)' },
+          lineStyle: { color: COLORS.grid, width: 1 },
+          itemStyle: { color: COLORS.grid },
+          symbol: 'none', smooth: 0.1, data: [] },
+        // Grid export plotted as negative values below the zero line
+        // (own stack so it doesn't get folded into the supply column).
+        // Dashed to read "excess going somewhere else."
+        { name: '● Grid export',   type: 'line', stack: 'export',
+          areaStyle: { color: 'rgba(59,130,246,0.25)' },
+          lineStyle: { color: COLORS.grid, width: 1, type: 'dashed' },
+          itemStyle: { color: COLORS.grid },
+          symbol: 'none', smooth: 0.1, data: [] },
+        // House load line on top — should match the top of the supply
+        // stack when not exporting; sits below the yellow top when there
+        // is surplus solar.
+        { name: '■ House load',    type: 'line',
+          lineStyle: { color: COLORS.load, width: 2.5 },
+          itemStyle: { color: COLORS.load },
+          symbol: 'none', smooth: 0.1, data: [] },
+      ],
+    });
+    window.addEventListener('resize', () => chart && chart.resize());
+  }
+
+  function fmtLabel(ts, mode) {
+    const d = (ts instanceof Date) ? ts : new Date(ts);
+    const HH = String(d.getHours()).padStart(2, '0');
+    const MM = String(d.getMinutes()).padStart(2, '0');
+    if (mode === 'hms') {
+      const SS = String(d.getSeconds()).padStart(2, '0');
+      return `${HH}:${MM}:${SS}`;
+    }
+    return `${HH}:${MM}`;
+  }
+
+  // Push a single fresh sample from /api/live onto the rolling buffer.
+  // Only used when the 5m window is active — longer windows pull
+  // pre-aggregated history from the server instead.
+  function pushSample(snap) {
+    if (currentWindow !== '5m') return;
+    const p = snap.panel || {};
+    const grid = p.grid_power_w;
+    history.ts.push(fmtLabel(new Date(), 'hms'));
+    history.solar.push(p.solar_power_w ?? null);
+    history.gridImport.push(grid == null ? null : Math.max(0, grid));
+    history.gridExport.push(grid == null ? null : Math.min(0, grid));
+    history.load.push(p.load_power_w ?? null);
+    while (history.ts.length > HISTORY_LEN) {
+      history.ts.shift();
+      history.solar.shift();
+      history.gridImport.shift(); history.gridExport.shift();
+      history.load.shift();
+    }
+    drawChart();
+  }
+
+  function drawChart() {
+    if (!chart) return;
+    chart.setOption({
+      xAxis: { data: history.ts },
+      series: [
+        { data: history.solar },
+        { data: history.gridImport },
+        { data: history.gridExport },
+        { data: history.load },
+      ],
+    });
+  }
+
+  // Replace the rolling buffer with a fresh server snapshot of the
+  // requested window. Called on initial page load, on zoom-window
+  // changes, and on the timer for non-5m windows.
+  async function loadHistory(window) {
+    try {
+      const r = await fetch(`/api/live/history?window=${window}`,
+                            { cache: 'no-store' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      const fmt = (WINDOWS[window] || WINDOWS['5m']).fmt;
+      history.ts.length = 0;
+      history.solar.length = 0;
+      history.gridImport.length = 0;
+      history.gridExport.length = 0;
+      history.load.length = 0;
+      for (const row of (data.samples || [])) {
+        const g = row.grid_w;
+        history.ts.push(fmtLabel(row.ts, fmt));
+        history.solar.push(row.solar_w);
+        history.gridImport.push(g == null ? null : Math.max(0, g));
+        history.gridExport.push(g == null ? null : Math.min(0, g));
+        history.load.push(row.load_w);
+      }
+      drawChart();
+    } catch (e) {
+      console.warn('history load failed:', e);
+    }
+  }
+
+  function setWindow(w) {
+    if (!WINDOWS[w]) w = '5m';
+    currentWindow = w;
+    // Update pill highlight
+    document.querySelectorAll('.pickers .pill[data-window]').forEach(el => {
+      el.classList.toggle('active', el.dataset.window === w);
+    });
+    // Update title
+    setText('#chart-title', WINDOWS[w].label);
+    // Replace the chart with a fresh server snapshot
+    loadHistory(w);
+    // Reset the periodic refresh timer (only for non-5m windows; 5m
+    // updates by per-poll append).
+    if (historyRefreshId) { clearInterval(historyRefreshId); historyRefreshId = null; }
+    const refresh = WINDOWS[w].refresh_ms;
+    if (refresh) historyRefreshId = setInterval(() => loadHistory(w), refresh);
+  }
+
+  // ---- Session-energy integrator -------------------------------------
+  // Accumulates kWh consumed over the duration the page has been open by
+  // integrating load_w between consecutive samples. Cap dt so a long
+  // pause/sleep doesn't bloat the total — if dt exceeds 2× POLL_MS we
+  // assume gaps and only credit the first POLL_MS worth.
+  const sessionStart = Date.now();
+  let sessionWh = 0;
+  let lastSampleMs = null;
+  let lastLoadW = null;
+
+  function integrateSession(loadW) {
+    const now = Date.now();
+    if (lastSampleMs != null && lastLoadW != null) {
+      let dtMs = now - lastSampleMs;
+      if (dtMs > 2 * POLL_MS) dtMs = POLL_MS;   // gap: don't extrapolate
+      // average load across the interval (trapezoidal) — cheap & decent
+      const avgW = (loadW + lastLoadW) / 2;
+      sessionWh += avgW * (dtMs / 3600000);
+    }
+    lastSampleMs = now;
+    lastLoadW = loadW;
+  }
+
+  function renderSession() {
+    const valEl = $('#tile-session .value');
+    const subEl = $('#tile-session .sub');
+    const elapsedMs = Date.now() - sessionStart;
+    const elapsedMin = elapsedMs / 60000;
+    let elapsedStr;
+    if (elapsedMin < 1)      elapsedStr = `${Math.floor(elapsedMs / 1000)} s`;
+    else if (elapsedMin < 60) elapsedStr = `${elapsedMin.toFixed(0)} min`;
+    else                       elapsedStr = `${(elapsedMin / 60).toFixed(1)} h`;
+    if (sessionWh < 1) {
+      valEl.textContent = `${sessionWh.toFixed(0)} Wh`;
+    } else {
+      valEl.textContent = `${(sessionWh / 1000).toFixed(2)} kWh`;
+    }
+    if (COST_PER_KWH == null) {
+      subEl.textContent = `over ${elapsedStr}`;
+    } else {
+      const cost = (sessionWh / 1000) * COST_PER_KWH;
+      subEl.textContent = `≈ $${cost.toFixed(2)} over ${elapsedStr}`;
+    }
+  }
+
+  // ---- Yesterday-load comparison -------------------------------------
+  // /api/live/yesterday hits the DB for the 10-min bucket nearest 24 h
+  // ago; we refresh once a minute (the value only meaningfully changes
+  // when we cross a new 10-min boundary). render runs every poll so the
+  // delta stays in sync with current load_w from /api/live.
+  const YESTERDAY_REFRESH_MS = 60 * 1000;
+  let yesterdayLoadW = null;
+
+  async function fetchYesterday() {
+    try {
+      const r = await fetch('/api/live/yesterday', { cache: 'no-store' });
+      const d = await r.json();
+      yesterdayLoadW = d.load_w;
+    } catch (e) {
+      yesterdayLoadW = null;
+    }
+  }
+
+  function renderYesterday(currentLoadW) {
+    const valEl = $('#tile-yesterday .value');
+    const subEl = $('#tile-yesterday .sub');
+    if (yesterdayLoadW == null) {
+      valEl.textContent = '—';
+      subEl.textContent = 'no bucket in window';
+      return;
+    }
+    if (currentLoadW == null) {
+      valEl.textContent = fmtW(yesterdayLoadW);
+      subEl.textContent = 'yesterday at this time';
+      return;
+    }
+    const delta = currentLoadW - yesterdayLoadW;
+    const sign = delta > 0 ? '+' : (delta < 0 ? '−' : '±');
+    valEl.textContent = `${sign}${fmtW(Math.abs(delta))}`;
+    const pct = yesterdayLoadW > 0 ? (delta / yesterdayLoadW) * 100 : 0;
+    subEl.textContent = `${sign}${Math.abs(pct).toFixed(0)}% vs ${fmtW(yesterdayLoadW)}`;
+  }
+
+  // ---- Top-mover ring buffer ------------------------------------------
+  // Per-circuit-id queue of {ts, power_w, name} samples, dropped after
+  // the window expires. Each poll: append, age out, find the id with the
+  // largest signed delta (now - oldest sample) above a noise floor.
+  const moverHistory = new Map();
+  const MOVER_WINDOW_MS = 60000;
+  const MOVER_MIN_DELTA_W = 50;
+
+  function trackMovers(circuits) {
+    const now = Date.now();
+    const cutoff = now - MOVER_WINDOW_MS;
+    for (const c of circuits) {
+      if (c.power_w == null) continue;
+      if (!moverHistory.has(c.id)) moverHistory.set(c.id, []);
+      const arr = moverHistory.get(c.id);
+      arr.push({ ts: now, power_w: c.power_w, name: c.name });
+      while (arr.length && arr[0].ts < cutoff) arr.shift();
+    }
+    for (const [id, arr] of moverHistory) {
+      if (!arr.length) moverHistory.delete(id);
+    }
+  }
+
+  function findTopMover() {
+    let best = null;
+    for (const [, arr] of moverHistory) {
+      if (arr.length < 2) continue;
+      const delta = arr[arr.length - 1].power_w - arr[0].power_w;
+      if (best == null || Math.abs(delta) > Math.abs(best.delta)) {
+        best = { name: arr[arr.length - 1].name, delta };
+      }
+    }
+    if (!best || Math.abs(best.delta) < MOVER_MIN_DELTA_W) return null;
+    return best;
+  }
+
+  function renderTopMover() {
+    const m = findTopMover();
+    const valEl = $('#tile-mover .value');
+    const subEl = $('#tile-mover .sub');
+    if (!m) {
+      valEl.textContent = '—';
+      valEl.style.fontSize = '';
+      subEl.textContent = 'no significant change';
+      return;
+    }
+    valEl.textContent = m.name;
+    valEl.style.fontSize = '1.05rem';
+    const sign = m.delta > 0 ? '+' : '−';
+    subEl.textContent = `${sign}${fmtW(Math.abs(m.delta))} over 60 s`;
+  }
+
+  // ---- Tiles -----------------------------------------------------------
+  function signLabel(w, posWord, negWord, idleWord) {
+    if (w == null) return idleWord;
+    if (w >  50) return posWord;
+    if (w < -50) return negWord;
+    return idleWord;
+  }
+
+  function renderTiles(snap) {
+    const p = snap.panel;
+    if (!p) return;
+
+    // Solar (inferred from positive branches; always >= 0)
+    const solar = p.solar_power_w;
+    $('#tile-solar .value').textContent = solar == null ? '—' : fmtW(solar);
+    $('#tile-solar .sub').textContent = solar == null ? 'unavailable'
+      : (solar > 50 ? 'producing' : 'idle / overnight');
+
+    // Grid: sign-aware (positive = importing). Sub also shows cost at
+    // the current rate so you can tell what running an extra kW costs.
+    const grid = p.grid_power_w;
+    $('#tile-grid .value').textContent = grid == null ? '—' : fmtW(Math.abs(grid));
+    let gridSub = signLabel(grid, 'importing', 'exporting', 'idle');
+    if (grid != null && Math.abs(grid) > 20 && COST_PER_KWH != null) {
+      const dollarsPerHour = (Math.abs(grid) / 1000) * COST_PER_KWH;
+      gridSub += ` · ${grid > 0 ? '−' : '+'}$${dollarsPerHour.toFixed(2)}/hr`;
+    }
+    $('#tile-grid .sub').textContent = gridSub;
+
+    // House load — named circuits + feedthrough (total household demand).
+    // Sub shows running-cost-equivalent if everything came from the grid,
+    // useful as a "what's this hour costing me at full price" gauge.
+    const load = p.load_power_w;
+    $('#tile-load .value').textContent = load == null ? '—' : fmtW(Math.abs(load));
+    if (load == null) {
+      $('#tile-load .sub').textContent = 'unavailable';
+    } else if (load < -50) {
+      $('#tile-load .sub').textContent = 'net backfeeding panel';
+    } else if (COST_PER_KWH == null) {
+      $('#tile-load .sub').textContent = 'all circuits + sub-panel';
+    } else {
+      const grossPerHour = (load / 1000) * COST_PER_KWH;
+      $('#tile-load .sub').textContent = `≈ $${grossPerHour.toFixed(2)}/hr at full grid rate`;
+    }
+
+    // Solar share — % of right-now demand currently coming from solar.
+    // If solar > load there's surplus going to the grid; show how much
+    // is being exported as a separate signal.
+    const share = p.solar_share_pct;
+    if (share == null) {
+      $('#tile-share .value').textContent = '—';
+      $('#tile-share .sub').textContent = 'no demand';
+    } else {
+      $('#tile-share .value').textContent = `${share.toFixed(0)}%`;
+      if (share >= 99 && solar != null && load != null && solar - load > 50) {
+        $('#tile-share .sub').textContent = `+ exporting ${fmtW(solar - load)}`;
+      } else if (share >= 99) {
+        $('#tile-share .sub').textContent = 'fully covered by solar';
+      } else if (share <= 1) {
+        $('#tile-share .sub').textContent = 'no solar contribution';
+      } else {
+        $('#tile-share .sub').textContent = `rest (${(100 - share).toFixed(0)}%) from grid`;
+      }
+    }
+
+    // Phase balance — derived from panel.branches[] partitioned tabs 1-16 vs 17-32.
+    const pa = p.phase_a_w, pb = p.phase_b_w, pdelta = p.phase_imbalance_pct;
+    if (pa == null || pb == null) {
+      $('#tile-phase .value').textContent = '—';
+      $('#tile-phase .sub').textContent = 'no branch data';
+    } else {
+      $('#tile-phase .value').textContent =
+        `A ${(pa/1000).toFixed(1)} · B ${(pb/1000).toFixed(1)} kW`;
+      $('#tile-phase .value').style.fontSize = '1.05rem';
+      $('#tile-phase .sub').textContent = pdelta == null
+        ? 'no load'
+        : (pdelta < 10 ? `Δ ${pdelta.toFixed(1)}% — balanced`
+          : pdelta < 20 ? `Δ ${pdelta.toFixed(1)}% — mild skew`
+          : `Δ ${pdelta.toFixed(1)}% — heavy skew`);
+    }
+
+    // Status
+    const status = [
+      p.run_config ? p.run_config.replace(/_/g, ' ') : null,
+      p.grid_state ? p.grid_state.replace(/^DSM_/, '') : null,
+      p.main_relay ? `relay ${p.main_relay}` : null,
+    ].filter(Boolean).join(' · ');
+    $('#tile-status .value').textContent = status || '—';
+    $('#tile-status .sub').textContent =
+      (p.grid_state && p.grid_state.includes('UP')) ? 'grid up' :
+      (p.grid_state && p.grid_state.includes('DOWN')) ? '◆ grid DOWN' : '—';
+  }
+
+  // ---- Per-circuit bars -------------------------------------------------
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"]/g,
+      (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  }
+
+  function renderCircuits(snap) {
+    const wrap = document.getElementById('circuit-list');
+    if (!snap.circuits || !snap.circuits.length) {
+      wrap.innerHTML = '<p style="color: var(--muted);">No circuits in snapshot.</p>';
+      return;
+    }
+    const named = snap.circuits.filter(c => c.power_w != null);
+    if (!named.length) {
+      wrap.innerHTML = '<p style="color: var(--muted);">No circuits reporting power.</p>';
+      return;
+    }
+    const max = Math.max(1, ...named.slice(0, 30).map(c => Math.abs(c.power_w)));
+    // Render up to 24 rows — covers all 32 if some are idle.
+    const rows = named.slice(0, 24);
+    const html = `
+      <table class="rank">
+        <thead>
+          <tr><th>Circuit</th><th class="num">Power</th><th class="bar"></th><th>Relay</th></tr>
+        </thead>
+        <tbody>
+          ${rows.map(c => {
+            const pct = (Math.abs(c.power_w) / max * 100).toFixed(1);
+            const producing = c.power_w < -5;
+            const glyph = producing ? '▲' : '■';
+            const color = producing ? '#facc15' : '#3b82f6';
+            return `
+              <tr>
+                <td>${glyph} ${escapeHtml(c.name)}</td>
+                <td class="num">${fmtW(c.power_w)}</td>
+                <td class="bar"><span class="bar-fill" style="width:${pct}%; background:${color};"></span></td>
+                <td>${escapeHtml(c.relay || '—')}</td>
+              </tr>`;
+          }).join('')}
+        </tbody>
+      </table>`;
+    wrap.innerHTML = html;
+  }
+
+  // ---- Poll loop --------------------------------------------------------
+  let polling = true;
+  let errCount = 0;
+
+  async function poll() {
+    if (!polling) return;
+    try {
+      const r = await fetch('/api/live', { cache: 'no-store' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const snap = await r.json();
+      if (snap.error) {
+        errCount++;
+        const el = $('#live-status');
+        el.textContent = `disconnected (${errCount}) — ${snap.error}`;
+        el.style.color = '#ec4899';
+        return;
+      }
+      errCount = 0;
+      const el = $('#live-status');
+      el.textContent = '● connected';
+      el.style.color = '#3b82f6';
+      setText('#last-update', 'updated ' + new Date().toLocaleTimeString());
+      renderTiles(snap);
+      renderCircuits(snap);
+      trackMovers(snap.circuits || []);
+      renderTopMover();
+      if (snap.panel && snap.panel.load_power_w != null) {
+        integrateSession(snap.panel.load_power_w);
+      }
+      renderSession();
+      renderYesterday(snap.panel ? snap.panel.load_power_w : null);
+      pushSample(snap);
+      const raw = document.getElementById('raw-dump');
+      if (raw) raw.textContent = JSON.stringify(snap, null, 2);
+    } catch (e) {
+      errCount++;
+      const el = $('#live-status');
+      el.textContent = `error (${errCount}) — ${e.message}`;
+      el.style.color = '#ec4899';
+    }
+  }
+
+  document.getElementById('pause-toggle').addEventListener('change', (e) => {
+    polling = !e.target.checked;
+    if (polling) poll();
+  });
+
+  // Zoom-pill clicks — anchor tags so they're keyboard-tabbable.
+  document.querySelectorAll('.pickers .pill[data-window]').forEach(el => {
+    el.addEventListener('click', (e) => {
+      e.preventDefault();
+      setWindow(el.dataset.window);
+    });
+  });
+
+  let intervalId = null;
+  let yesterdayIntervalId = null;
+  window.addEventListener('load', () => {
+    initChart();
+    setWindow('5m');       // initial chart hydrate from server history
+    poll();
+    intervalId = setInterval(poll, POLL_MS);
+    fetchYesterday();
+    yesterdayIntervalId = setInterval(fetchYesterday, YESTERDAY_REFRESH_MS);
+  });
+  // Stop polling when the tab is hidden; resume on visible. Saves the
+  // panel from getting hit by abandoned background tabs.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      if (intervalId) { clearInterval(intervalId); intervalId = null; }
+    } else if (!intervalId && polling) {
+      poll();
+      intervalId = setInterval(poll, POLL_MS);
+    }
+  });
+})();
+</script>
+{% endblock %}

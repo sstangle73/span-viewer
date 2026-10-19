@@ -1,0 +1,35 @@
+# Lint, then the smoke test: a TimescaleDB service, the schema, the synthetic
+# house from scripts/sample_data.py, and every page and API endpoint.
+stages: [lint, test]
+
+default:
+  image: python:3.13-slim
+  interruptible: true
+
+variables:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+lint:
+  stage: lint
+  script:
+    - pip install -q "ruff>=0.6"
+    - ruff check .
+
+test:
+  stage: test
+  services:
+    - name: timescale/timescaledb:2.17.2-pg17
+      alias: db
+  variables:
+    POSTGRES_USER: span_app
+    POSTGRES_PASSWORD: span
+    POSTGRES_DB: span
+    DATABASE_URL: postgresql://span_app:span@db:5432/span
+    TZ: America/New_York
+    CIRCUITS_FILE: $CI_PROJECT_DIR/circuits.example.yaml
+    SPAN_LIVE_SOURCE: "off"
+  script:
+    - pip install -q -r app/requirements.txt -r ingester/requirements.txt "pytest>=8" "httpx>=0.27"
+    - python scripts/apply_schema.py --wait 90
+    - python scripts/sample_data.py --days 400
+    - pytest -q

@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% block title %}Alerts log — span-viewer{% endblock %}
+
+{% block content %}
+<section class="panel">
+  <h2>Alerts log — every ntfy push the anomaly alerter sent</h2>
+  <p style="font-size: 0.8rem; color: var(--muted); margin: 0 0 0.75rem;">
+    Each row is one ntfy notification sent by the end-of-day anomaly alerter,
+    which ran hourly from 2026-05-11 until it was retired on 2026-10-18 (mostly
+    noise: <a href="/anomalies">/anomalies</a> keeps the same detection, on demand).
+    Severity glyph maps to ntfy priority: ● blue = P3 (default),
+    ▲ orange = P4 (high, ≥ 5× baseline), ◆ magenta = P5 (max, ≥ 10× baseline,
+    bypasses Do Not Disturb on iOS).
+  </p>
+  {% if not rows %}
+    <p style="color: var(--muted);">No alerts pushed yet.</p>
+  {% else %}
+  <table class="rank">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Sent at</th>
+        <th>Date</th>
+        <th>Circuit</th>
+        <th class="num">kWh</th>
+        <th class="num">Baseline</th>
+        <th class="num">Ratio</th>
+        <th>Severity</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td><time datetime="{{ r.alerted_at }}">{{ r.alerted_at.strftime('%Y-%m-%d %H:%M UTC') if r.alerted_at else '—' }}</time></td>
+        <td><a href="/day?date={{ r.date }}&circuit={{ r.space_id }}">{{ r.date }}</a></td>
+        <td>{{ r.space_name }}</td>
+        <td class="num">{{ '%.2f'|format(r.kwh) }}</td>
+        <td class="num">{{ '%.2f'|format(r.baseline) }}</td>
+        <td class="num">{{ '%.1f'|format(r.ratio) }}x</td>
+        <td>
+          {% if r.ratio >= 10 %}
+            <span style="color: #ec4899">◆ P5 critical</span>
+          {% elif r.ratio >= 5 %}
+            <span style="color: #f59e0b">▲ P4 high</span>
+          {% else %}
+            <span style="color: #3b82f6">● P3</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p style="font-size: 0.75rem; color: var(--muted); margin: 0.5rem 0 0;">
+    Showing the most recent {{ rows|length }} of up to {{ limit }} alerts.
+    The push alerter that filled this table was retired; the history stays.
+  </p>
+  {% endif %}
+</section>
+{% endblock %}

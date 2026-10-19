@@ -1,0 +1,215 @@
+{% extends "base.html" %}
+
+{% block title %}Health — span-viewer{% endblock %}
+
+{% block content %}
+{% set last_run = snap.recent_runs[0] if snap.recent_runs else None %}
+
+{# ---- Top-level operational tiles ---- #}
+<section class="tiles">
+  <div class="tile t-blue">
+    <div class="label">● Successful ingest runs / 24h</div>
+    <div class="value">{{ snap.runs_24h }}</div>
+    <div class="sub">expected ~144 (10-min cadence)</div>
+  </div>
+  <div class="tile {% if last_run and last_run.status == 'success' %}t-blue{% else %}t-magenta{% endif %}">
+    <div class="label">Last ingest run</div>
+    <div class="value" style="font-size: 1.1rem; line-height: 1.2; padding-top: 0.5rem;">
+      {{ last_run.status if last_run else '—' }}
+    </div>
+    <div class="sub">
+      {% if last_run %}
+        <time datetime="{{ last_run.finished_at or last_run.started_at }}">
+          {{ (last_run.finished_at or last_run.started_at).strftime('%Y-%m-%d %H:%M UTC') }}
+        </time>
+      {% endif %}
+    </div>
+  </div>
+  <div class="tile {% if snap.anomalies_week > 0 %}t-magenta{% else %}t-violet{% endif %}">
+    <div class="label">◆ Anomalies pushed / 7d</div>
+    <div class="value">{{ snap.anomalies_week }}</div>
+    <div class="sub">
+      {% if snap.last_alert %}
+        last: <time datetime="{{ snap.last_alert }}">{{ snap.last_alert.strftime('%m-%d %H:%M UTC') }}</time>
+      {% else %}
+        never
+      {% endif %}
+    </div>
+  </div>
+  <div class="tile t-yellow">
+    <div class="label">★ DB row counts</div>
+    <div class="value" style="font-size: 1.1rem; line-height: 1.4; padding-top: 0.5rem;">
+      {{ '{:,}'.format(snap.counts.panel_rows or 0) }} <span style="font-size: 0.7em; color: var(--muted)">panel</span><br>
+      {{ '{:,}'.format(snap.counts.space_rows or 0) }} <span style="font-size: 0.7em; color: var(--muted)">space</span>
+    </div>
+    <div class="sub">
+      {{ snap.counts.spaces or 0 }} circuits
+    </div>
+  </div>
+  <div class="tile t-blue">
+    <div class="label">Total ingest runs lifetime</div>
+    <div class="value">{{ '{:,}'.format(snap.counts.ingest_runs or 0) }}</div>
+    <div class="sub">{{ now.strftime('%Y-%m-%d %H:%M UTC') }} now</div>
+  </div>
+</section>
+
+{# ---- Panel metric freshness ---- #}
+<section class="panel">
+  <h2>SPAN cloud vs VictoriaMetrics, last 7 days</h2>
+  <div hx-get="/health/vm-check" hx-trigger="load" hx-swap="innerHTML"><p class="muted">Comparing…</p></div>
+</section>
+
+<section class="panel">
+  <h2>Panel-level metric freshness</h2>
+  <table class="rank">
+    <thead>
+      <tr>
+        <th>Metric</th>
+        <th class="num">Last reading (UTC)</th>
+        <th class="num">Rows in DB</th>
+        <th>Staleness</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for m in snap.panel_metrics %}
+      <tr>
+        <td>{{ m.metric }}</td>
+        <td class="num">{{ m.last_ts.strftime('%Y-%m-%d %H:%M') if m.last_ts else '—' }}</td>
+        <td class="num">{{ '{:,}'.format(m.rows) }}</td>
+        <td>
+          {% if m.last_ts %}
+            {% set staleness_minutes = ((now - m.last_ts).total_seconds() / 60)|int %}
+            {% if staleness_minutes < 30 %}
+              <span style="color: #3b82f6">● fresh</span>
+            {% elif staleness_minutes < 120 %}
+              <span style="color: #f59e0b">▲ {{ staleness_minutes }} min ago</span>
+            {% else %}
+              <span style="color: #ec4899">◆ {{ (staleness_minutes/60)|int }} h ago</span>
+            {% endif %}
+          {% else %}—{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+{# ---- Per-circuit row counts ---- #}
+<section class="panel">
+  <h2>Per-circuit row counts</h2>
+  <table class="rank">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Circuit</th>
+        <th class="num">Total kWh</th>
+        <th class="num">Rows</th>
+        <th class="num">Last reading</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in snap.spaces_meta %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td>{{ s.name }}</td>
+        <td class="num">{{ '%.0f'|format(s.total_kwh or 0) }}</td>
+        <td class="num">{{ '{:,}'.format(s.rows) }}</td>
+        <td class="num">{{ s.last_ts.strftime('%Y-%m-%d %H:%M') if s.last_ts else '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+{# ---- Data export links ---- #}
+<section class="panel">
+  <h2>Data export</h2>
+  <p style="font-size: 0.8rem; color: var(--muted); margin: 0 0 0.75rem;">
+    Generic endpoints — append <code>&amp;fmt=json</code> instead of the default CSV for JSON. Useful for ad-hoc analysis outside the app.
+  </p>
+  <table class="rank">
+    <thead>
+      <tr><th>Endpoint</th><th>What it gives you</th><th>Formats</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>/export/top?window=all</code></td>
+        <td>Per-circuit kWh totals over the chosen window.</td>
+        <td>
+          <a href="/export/top?window=all">CSV</a> ·
+          <a href="/export/top?window=all&fmt=json">JSON</a>
+        </td>
+      </tr>
+      <tr>
+        <td><code>/export/best-days?window=12mo</code></td>
+        <td>Top-1000 days by total kWh in the window.</td>
+        <td>
+          <a href="/export/best-days?window=12mo">CSV</a> ·
+          <a href="/export/best-days?window=12mo&fmt=json">JSON</a>
+        </td>
+      </tr>
+      <tr>
+        <td><code>/export/solar-monthly</code></td>
+        <td>Monthly solar produced / consumed / exported / self %.</td>
+        <td>
+          <a href="/export/solar-monthly">CSV</a> ·
+          <a href="/export/solar-monthly?fmt=json">JSON</a>
+        </td>
+      </tr>
+      <tr>
+        <td><code>/export/sessions?days=365</code></td>
+        <td>EV charging sessions on the EV charger's circuit (circuits.yaml <code>ev</code>).</td>
+        <td>
+          <a href="/export/sessions?days=365">CSV</a> ·
+          <a href="/export/sessions?days=365&fmt=json">JSON</a>
+        </td>
+      </tr>
+      <tr>
+        <td><code>/export/anomalies?window=365&amp;threshold=3.0</code></td>
+        <td>Per-circuit anomaly detections (configurable window + threshold).</td>
+        <td>
+          <a href="/export/anomalies?window=365&threshold=3.0">CSV</a> ·
+          <a href="/export/anomalies?window=365&threshold=3.0&fmt=json">JSON</a>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+{# ---- Recent ingest runs ---- #}
+<section class="panel">
+  <h2>Last 10 ingest runs</h2>
+  <table class="rank">
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th class="num">Started (UTC)</th>
+        <th class="num">Finished (UTC)</th>
+        <th>Status</th>
+        <th class="num">Panel rows</th>
+        <th class="num">Space rows</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in snap.recent_runs %}
+      <tr>
+        <td>{{ r.id }}</td>
+        <td class="num">{{ r.started_at.strftime('%m-%d %H:%M:%S') if r.started_at else '—' }}</td>
+        <td class="num">{{ r.finished_at.strftime('%m-%d %H:%M:%S') if r.finished_at else '—' }}</td>
+        <td>
+          {% if r.status == 'success' %}
+            <span style="color: #3b82f6">● success</span>
+          {% elif r.status == 'running' %}
+            <span style="color: #38bdf8">▶ running</span>
+          {% else %}
+            <span style="color: #ec4899">◆ {{ r.status }}</span>
+          {% endif %}
+        </td>
+        <td class="num">{{ '{:,}'.format(r.panel_rows_in) if r.panel_rows_in is not none else '—' }}</td>
+        <td class="num">{{ '{:,}'.format(r.space_rows_in) if r.space_rows_in is not none else '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

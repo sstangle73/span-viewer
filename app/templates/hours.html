@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block title %}Hour-of-day pattern — span-viewer{% endblock %}
+
+{% block content %}
+<section class="controls">
+  <form method="get" action="/hours">
+    <label for="circuit">Circuit</label>
+    <input type="hidden" name="weeks" value="{{ weeks }}">
+    <select id="circuit" name="circuit" onchange="this.form.submit()">
+      {% for c in circuits %}
+        {% set cid = c.id if c.id is defined else c.space_id %}
+        <option value="{{ cid }}" {% if cid == selected_circuit %}selected{% endif %}>
+          {{ c.name }}
+        </option>
+      {% endfor %}
+    </select>
+  </form>
+</section>
+
+<section class="pickers">
+  {% for w in [4, 12, 24] %}
+    <a class="pill {% if weeks == w %}active{% endif %}" href="/hours?circuit={{ selected_circuit }}&weeks={{ w }}#chart">Last {{ w }} weeks</a>
+  {% endfor %}
+</section>
+
+<section class="panel" id="chart">
+  <h2>Average kWh per hour-of-day</h2>
+  <div id="hours-chart" style="width: 100%; height: 420px;"></div>
+  <p style="font-size: 0.8rem; color: var(--muted); margin: 0.5rem 0 0;">
+    ■ blue = weekdays (Mon–Fri). ▲ orange = weekends (Sat–Sun).
+    Computed across rows at hourly resolution or finer
+    (<code>duration_s &le; 3600</code>), so the answer only reflects the recent
+    window where 10-min or hourly data is available — past ~12 weeks ago we
+    only have daily aggregates and can't tell hour-of-day load shape.
+  </p>
+</section>
+
+<script type="application/json" id="hours-data">{{ rows_json | safe }}</script>
+<script>
+  window.addEventListener('load', () => {
+    const rows = JSON.parse(document.getElementById('hours-data').textContent);
+    if (typeof echarts === 'undefined') return;
+
+    // Make sure we always have 24 hours, even if the query is missing some.
+    const byHour = Object.fromEntries(rows.map(r => [r.hour, r]));
+    const hours = Array.from({length: 24}, (_, h) => h);
+    const labels = hours.map(h => String(h).padStart(2,'0') + ':00');
+    const weekday = hours.map(h => +(byHour[h]?.weekday_kwh ?? 0).toFixed(3));
+    const weekend = hours.map(h => +(byHour[h]?.weekend_kwh ?? 0).toFixed(3));
+
+    const chart = echarts.init(document.getElementById('hours-chart'), 'span-dark');
+    chart.setOption({
+      tooltip: {
+        trigger: 'axis',
+        valueFormatter: (v) => v == null ? '—' : `${v.toFixed(2)} kWh`,
+      },
+      legend: { top: 0 },
+      grid: { left: 60, right: 30, top: 40, bottom: 50 },
+      xAxis: { type: 'category', data: labels },
+      yAxis: { type: 'value', name: 'kWh / hour' },
+      series: [
+        { name: '■ Weekday', type: 'bar', data: weekday,
+          itemStyle: { color: '#3b82f6' } },
+        { name: '▲ Weekend', type: 'bar', data: weekend,
+          itemStyle: { color: '#f59e0b' } },
+      ],
+    });
+    window.addEventListener('resize', () => chart.resize());
+  });
+</script>
+{% endblock %}

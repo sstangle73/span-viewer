@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+
+{% block title %}Biggest days — span-viewer{% endblock %}
+
+{% set whole_house = selected_circuit == 'whole_house' %}
+{% set metric_label = {
+  'consumption': 'Consumption',
+  'production':  'Solar production',
+  'export':      'Solar export',
+  'import':      'Grid import',
+}[metric] %}
+{% set metric_glyph = {
+  'consumption': '●',
+  'production':  '▲',
+  'export':      '◆',
+  'import':      '■',
+}[metric] %}
+{% set metric_color = {
+  'consumption': '#e2e8f0',
+  'production':  '#facc15',
+  'export':      '#ec4899',
+  'import':      '#3b82f6',
+}[metric] %}
+
+{% block content %}
+<section class="controls">
+  <form method="get" action="/biggest">
+    <label for="circuit">Circuit</label>
+    <input type="hidden" name="window" value="{{ window }}">
+    <input type="hidden" name="metric" value="{{ metric }}">
+    <select id="circuit" name="circuit" onchange="this.form.submit()">
+      {% for c in circuits %}
+        {% set cid = c.id if c.id is defined else c.space_id %}
+        <option value="{{ cid }}" {% if cid == selected_circuit %}selected{% endif %}>
+          {{ c.name }}{% if c.total_kwh %} — {{ '%.0f'|format(c.total_kwh) }} kWh total{% endif %}
+        </option>
+      {% endfor %}
+    </select>
+  </form>
+</section>
+
+<section class="pickers">
+  <a class="pill {% if window == '30d'  %}active{% endif %}" href="/biggest?window=30d&circuit={{ selected_circuit }}&metric={{ metric }}#table">Last 30 days</a>
+  <a class="pill {% if window == '90d'  %}active{% endif %}" href="/biggest?window=90d&circuit={{ selected_circuit }}&metric={{ metric }}#table">Last 90 days</a>
+  <a class="pill {% if window == '12mo' %}active{% endif %}" href="/biggest?window=12mo&circuit={{ selected_circuit }}&metric={{ metric }}#table">Last 12 months</a>
+  <a class="pill {% if window == 'all'  %}active{% endif %}" href="/biggest?window=all&circuit={{ selected_circuit }}&metric={{ metric }}#table">All time</a>
+</section>
+
+{% if whole_house %}
+<section class="pickers" style="margin-top: -0.25rem;">
+  <span style="font-size: 0.8rem; color: var(--muted); align-self: center; margin-right: 0.25rem;">
+    Biggest by:
+  </span>
+  <a class="pill {% if metric == 'consumption' %}active{% endif %}"
+     href="/biggest?window={{ window }}&circuit={{ selected_circuit }}&metric=consumption#table">● Consumption</a>
+  <a class="pill {% if metric == 'production' %}active{% endif %}"
+     href="/biggest?window={{ window }}&circuit={{ selected_circuit }}&metric=production#table">▲ Production</a>
+  <a class="pill {% if metric == 'export' %}active{% endif %}"
+     href="/biggest?window={{ window }}&circuit={{ selected_circuit }}&metric=export#table">◆ Export</a>
+  <a class="pill {% if metric == 'import' %}active{% endif %}"
+     href="/biggest?window={{ window }}&circuit={{ selected_circuit }}&metric=import#table">■ Grid import</a>
+</section>
+{% endif %}
+
+<section class="panel" id="table">
+  <h2>
+    Top {{ rows|length }} days by
+    <span style="color: {{ metric_color }};">{{ metric_glyph }} {{ metric_label|lower }}</span>
+    ({{ window }})
+  </h2>
+  {% if not rows %}
+    <p style="color: var(--muted); margin: 0;">No data for this window.</p>
+  {% else %}
+  <table class="rank">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Date</th>
+        <th>Day</th>
+        <th class="num">kWh</th>
+        {% if whole_house and metric == 'consumption' %}
+          <th class="num" title="Consumption served directly by solar">▲ Solar</th>
+          <th class="num" title="Consumption served from the grid (bill driver)">■ Grid</th>
+          <th class="num" title="Share of the day's load served by solar">% solar</th>
+        {% endif %}
+        <th class="bar"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% set max_kwh = rows[0].kwh if rows else 1 %}
+      {% set dow_name = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'] %}
+      {% for r in rows %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td><a href="/day?date={{ r.date }}&circuit={{ selected_circuit }}">{{ r.date }}</a></td>
+        <td>
+          {% if r.day_type == 'weekend' %}
+            <span style="color: var(--warn)">◆ {{ dow_name[r.dow] }}</span>
+          {% else %}
+            <span style="color: var(--muted)">● {{ dow_name[r.dow] }}</span>
+          {% endif %}
+        </td>
+        <td class="num">{{ '%.1f'|format(r.kwh) }}</td>
+        {% if whole_house and metric == 'consumption' %}
+          <td class="num" style="color: #f59e0b;">{{ '%.1f'|format(r.from_solar or 0) }}</td>
+          <td class="num" style="color: #3b82f6;">{{ '%.1f'|format(r.from_grid or 0) }}</td>
+          <td class="num">
+            {% if r.kwh %}
+              {{ '%.0f%%'|format((r.from_solar or 0) / r.kwh * 100) }}
+            {% else %}—{% endif %}
+          </td>
+        {% endif %}
+        <td class="bar"><span class="bar-fill" style="width: {{ (r.kwh / max_kwh * 100)|round(1) }}%"></span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p style="font-size: 0.8rem; color: var(--muted); margin: 0.5rem 0 0;">
+    {% if metric == 'consumption' and whole_house %}
+      Click any date to drill into the day's curve. ▲ amber = served by solar,
+      ■ blue = imported from grid (the bill driver).
+      ◆ orange marks weekend days, ● gray marks weekdays.
+    {% elif metric == 'production' %}
+      Gross solar production (PV output before any goes to grid). Click to see
+      the day's curve.
+    {% elif metric == 'export' %}
+      Solar pushed back to grid (≈ production minus on-site use). 1:1 net
+      metering means each kWh here banks credit against future imports.
+    {% elif metric == 'import' %}
+      Grid kWh actually used by the building — the direct bill driver, before
+      any export credits are applied.
+    {% else %}
+      Click any date to drill into the day's curve. ◆ orange marks weekend days,
+      ● gray marks weekdays.
+    {% endif %}
+  </p>
+  {% endif %}
+</section>
+{% endblock %}

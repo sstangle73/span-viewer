@@ -1,0 +1,14 @@
+[Unit]
+Description=span-viewer auto-pull from origin/main
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/span-viewer
+ExecStart=/opt/span-viewer/scripts/auto-pull.sh
+StandardOutput=journal
+StandardError=journal
+# Network hiccup or merge conflict shouldn't hang forever.
+TimeoutStartSec=60s

@@ -1,0 +1,58 @@
+# span-viewer settings. Copy to /etc/span-viewer/config.toml, or set the same
+# names as environment variables (the environment wins). The same settings in
+# KEY=VALUE form in /etc/span-viewer/span-viewer.env work too: that's
+# systemd's EnvironmentFile format, so one file feeds the units and the
+# scripts you run by hand. app/config.py reads them all.
+#
+# Nothing here has a default host: leave a line out and that feature is off.
+# Keep secrets (passwords, the ntfy topic) out of any file you commit.
+
+# Time zone for every "local day": daily totals, heatmaps, the day view.
+TZ = "America/Chicago"
+
+# Postgres (TimescaleDB). Unset: user span_app on localhost, password from
+# /root/.span-viewer-db-password.
+DATABASE_URL = "postgresql://span_app:change-me@localhost:5432/span"
+
+# The panel on your LAN (IP or name). Unset: the addresses stored by
+# scripts/register-span-*.py in /etc/span-viewer/*.json.
+SPAN_HOST = "192.168.1.50"
+
+# Where /live gets the panel's state: "ebus" (the panel's own MQTT broker,
+# firmware r202633+, registered with scripts/register-span-api-v2.py), "v1"
+# (the older REST API, until SPAN retires it), "shadow" (both, compared), or
+# "off" (no live poller, e.g. with sample data).
+# SPAN_LIVE_SOURCE = "ebus"
+
+# Republish the live snapshot to an MQTT broker (Home Assistant discovery
+# included). mqtt://[user:pass@]host[:port][/topic_prefix]; or put the login
+# in MQTT_USERNAME / MQTT_PASSWORD. Unset: no MQTT.
+# MQTT_URL = "mqtt://broker.lan:1883/span"
+# MQTT_HA_PREFIX = "homeassistant"
+
+# Push a notification when the panel's firmware changes (ingester/firmware_watch.py).
+# NTFY_URL = "https://ntfy.sh"
+# NTFY_TOPIC = "a-long-random-secret"   # anyone who knows it can read and post
+# APP_URL = "https://span-viewer.example.lan"   # the push links to APP_URL/health
+
+# Behind a reverse proxy: the proxy addresses uvicorn trusts for X-Forwarded-*.
+# FORWARDED_ALLOW_IPS = "127.0.0.1"
+
+# Optional cross-check on /health: compare SPAN's cloud history with a
+# VictoriaMetrics that records the panel's power (W) from the MQTT feed.
+# VM_URL = "http://victoriametrics.lan:8428"
+# VM_SOLAR_SERIES = "span_panel_solar_power_w"
+# VM_LOAD_SERIES = "span_panel_load_power_w"
+
+# Cost: an optional flat tariff. Unset: every page shows kWh only.
+# RATE_IMPORT_PER_KWH = 0.30          # $ per kWh bought from the grid
+# RATE_EXPORT_CREDIT_PER_KWH = 0.10   # $ per kWh exported; unset = same as import
+
+# Where circuits.yaml is (default /etc/span-viewer/circuits.yaml).
+# CIRCUITS_FILE = "/etc/span-viewer/circuits.yaml"
+
+# Paths to answer with a 301 elsewhere (e.g. pages you moved to another app).
+# Keep this table last: TOML puts every key after it inside the table. In an
+# .env file: REDIRECTS=/old=https://example.lan/new,/other=https://...
+# [REDIRECTS]
+# "/old-page" = "https://example.lan/new-page"

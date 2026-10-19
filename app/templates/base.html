@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>{% block title %}span-viewer{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css?v={{ static_v }}">
+
+  <!-- PWA install hooks. Manifest + theme-color tell Chrome/Edge this is
+       installable; the apple-* meta tags + apple-touch-icon make iOS "Add
+       to Home Screen" launch in standalone (no Safari chrome). -->
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#0f172a">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/static/icon.svg">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="span-viewer">
+
+  <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.4/dist/htmx.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js" defer></script>
+  <script>
+    // Register the 'span-dark' ECharts theme before per-page renderers run.
+    // The deferred CDN script above executes after parse but before
+    // DOMContentLoaded, so echarts is defined when this listener fires; the
+    // head-level registration runs before any per-page DOMContentLoaded/load
+    // handler (those are window-level, this is document-level → earlier in
+    // the bubble path). Per-chart setOption() options still override theme.
+    document.addEventListener('DOMContentLoaded', () => {
+      if (typeof echarts === 'undefined') return;
+      const FG = '#e2e8f0', FG_DIM = '#94a3b8',
+            LINE = '#475569', SPLIT = '#334155',
+            TIP_BG = '#0f172a';
+      echarts.registerTheme('span-dark', {
+        // CB-safe categorical palette — distinct hues, no reds/greens-only
+        // pairings. Series that need specific brand colors override via
+        // itemStyle/lineStyle.
+        color: [
+          '#3b82f6',  // blue
+          '#f59e0b',  // orange
+          '#8b5cf6',  // violet
+          '#ec4899',  // magenta
+          '#eab308',  // yellow
+          '#06b6d4',  // cyan
+          '#cbd5e1',  // light slate (lime read as yellow for colour-blind eyes)
+          '#a78bfa',  // light violet
+          '#fb7185',  // coral
+        ],
+        backgroundColor: 'transparent',
+        textStyle: { color: FG },
+        title:    { textStyle: { color: FG }, subtextStyle: { color: FG_DIM } },
+        // type:'scroll' so a long multi-series legend keeps to one row
+        // with chevron paging buttons instead of wrapping into 3-4 rows
+        // that push the plot area down (especially noticeable on /day and
+        // /flows on phones). Charts that don't overflow show no chevrons.
+        legend:   { textStyle: { color: FG }, inactiveColor: '#64748b', type: 'scroll' },
+        tooltip:  { backgroundColor: TIP_BG, borderColor: SPLIT, borderWidth: 1,
+                    textStyle: { color: FG, fontSize: 12 },
+                    padding: [6, 8],
+                    // confine keeps the tooltip box within the chart's bounding
+                    // rect — on phones a tap near the right edge would otherwise
+                    // push the tooltip past the viewport. Combined with the
+                    // extraCssText max-width cap (relative to viewport) so a
+                    // long multi-series tooltip wraps instead of overflowing.
+                    confine: true,
+                    extraCssText: 'max-width: 92vw; white-space: normal; word-break: break-word;' },
+        visualMap: { textStyle: { color: FG_DIM } },
+        categoryAxis: {
+          axisLine:  { lineStyle: { color: LINE } },
+          axisTick:  { lineStyle: { color: LINE } },
+          axisLabel: { color: FG },
+          splitLine: { lineStyle: { color: SPLIT } },
+          nameTextStyle: { color: FG_DIM },
+        },
+        valueAxis: {
+          axisLine:  { show: true, lineStyle: { color: LINE } },
+          axisTick:  { lineStyle: { color: LINE } },
+          axisLabel: { color: FG },
+          splitLine: { lineStyle: { color: SPLIT } },
+          nameTextStyle: { color: FG_DIM },
+        },
+        timeAxis: {
+          axisLine:  { lineStyle: { color: LINE } },
+          axisTick:  { lineStyle: { color: LINE } },
+          axisLabel: { color: FG },
+          splitLine: { lineStyle: { color: SPLIT } },
+          nameTextStyle: { color: FG_DIM },
+        },
+        logAxis: {
+          axisLine:  { lineStyle: { color: LINE } },
+          axisTick:  { lineStyle: { color: LINE } },
+          axisLabel: { color: FG },
+          splitLine: { lineStyle: { color: SPLIT } },
+          nameTextStyle: { color: FG_DIM },
+        },
+        calendar: {
+          itemStyle:  { color: TIP_BG, borderColor: '#1e293b', borderWidth: 1 },
+          splitLine:  { show: false },
+          yearLabel:  { show: false },
+          monthLabel: { color: FG_DIM },
+          dayLabel:   { color: FG_DIM },
+        },
+      });
+
+      // Phone-only grid shrink: each chart sets its own grid.left
+      // (typically 56-70 px) to leave room for axis labels, which on a
+      // 339-px-wide mobile viewport eats ~18-20% of the plot area.
+      // Wrap echarts.init so that the first setOption with a plain
+      // {grid: ...} gets re-shaped into ECharts's native baseOption/media
+      // form with a mobile override (grid.left: 40, right: 16). ECharts
+      // re-evaluates media queries on chart.resize() so it handles
+      // portrait/landscape rotation natively. Skipped for:
+      //   - calls already in baseOption/media form (e.g. /top, /flows
+      //     which set their own media overrides),
+      //   - charts without a grid (Sankey, heatmap calendar, etc.),
+      //   - non-first setOption calls (data refresh tick on /live etc.).
+      const _origInit = echarts.init.bind(echarts);
+      echarts.init = function (...args) {
+        const chart = _origInit(...args);
+        const _origSetOption = chart.setOption.bind(chart);
+        let _wrappedOnce = false;
+        chart.setOption = function (opt, ...rest) {
+          const alreadyMedia = opt && (opt.media || opt.baseOption);
+          const hasGrid = opt && opt.grid
+            && typeof opt.grid === 'object' && !Array.isArray(opt.grid);
+          if (!_wrappedOnce && hasGrid && !alreadyMedia) {
+            _wrappedOnce = true;
+            return _origSetOption.call(this, {
+              baseOption: opt,
+              media: [{
+                query: { maxWidth: 600 },
+                option: { grid: { left: 40, right: 16 } },
+              }],
+            }, ...rest);
+          }
+          return _origSetOption.call(this, opt, ...rest);
+        };
+        return chart;
+      };
+    }, { once: true });
+  </script>
+</head>
+<body>
+  <header>
+    {% if nav %}
+    <details class="nav-drawer" id="nav-drawer">
+      <summary aria-label="Toggle navigation menu">
+        <span class="hamburger" aria-hidden="true">☰</span>
+        <span class="brand-title">span-viewer</span>
+        {% if active_label %}<span class="brand-sep" aria-hidden="true">/</span><span class="current-page">{{ active_label }}</span>{% endif %}
+      </summary>
+      <nav class="nav-menu" aria-label="Site navigation">
+        {% for group_label, items in nav %}
+        <div class="nav-group">
+          <div class="nav-group-label">{{ group_label }}</div>
+          {% for path, label in items %}
+            <a href="{{ path }}" class="nav-link {% if path == active %}active{% endif %}">{{ label }}</a>
+          {% endfor %}
+        </div>
+        {% endfor %}
+      </nav>
+    </details>
+    {% else %}
+    <span class="brand-title">span-viewer</span>
+    {% endif %}
+    {% if health %}
+    <div class="health">
+      <span class="health-label">Latest:</span>
+      <time datetime="{{ health.latest_ts }}">{{ health.latest_ts.strftime('%Y-%m-%d %H:%M UTC') if health.latest_ts else '—' }}</time>
+      {% if health.last_run %}
+        <span class="health-sep">·</span>
+        <span class="status status-{{ health.last_run.status }}">{{ health.last_run.status }}</span>
+      {% endif %}
+    </div>
+    {% endif %}
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  <script>
+    // Re-honor #hash after the page (and our ECharts canvases) finish laying
+    // out. The browser tries to scroll to the hash on initial parse, but the
+    // chart heights expand as JS runs and the position shifts — without this
+    // re-scroll the user lands at the top after clicking a picker pill.
+    function scrollToHash() {
+      if (!window.location.hash) return;
+      try {
+        const el = document.querySelector(window.location.hash);
+        if (el) el.scrollIntoView({ block: 'start', behavior: 'auto' });
+      } catch (_) {}
+    }
+    window.addEventListener('load', () => {
+      // Two passes: once when DOM/CSS settle, once more after ECharts init
+      // finishes (which is dispatched on window.load → setTimeout(0) lands
+      // in a later tick).
+      scrollToHash();
+      setTimeout(scrollToHash, 150);
+    });
+
+    // <details> doesn't close on outside-click natively — wire that up so
+    // the nav drawer feels like a normal popover. Click on the summary
+    // toggles as usual; click anywhere else dismisses an open drawer.
+    document.addEventListener('click', (e) => {
+      const drawer = document.getElementById('nav-drawer');
+      if (!drawer || !drawer.open) return;
+      if (drawer.contains(e.target)) return;
+      drawer.open = false;
+    });
+
+    // Register the service worker so the app is installable as a PWA.
+    // Scope is root so all pages are covered. We bail silently if the
+    // browser doesn't support SW or if registration fails — installability
+    // is a nice-to-have, not a hard requirement for any page to work.
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js', { scope: '/' })
+          .catch((err) => console.warn('SW registration failed:', err));
+      });
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+
+{% block title %}Cluster history — span-viewer{% endblock %}
+
+{% block content %}
+<section class="pickers">
+  {% for d in [7, 14, 30, 60] %}
+    <a class="pill {% if days == d %}active{% endif %}" href="/discover/cluster?circuit={{ circuit }}&amplitude={{ amplitude }}{% if duration %}&duration={{ duration }}{% endif %}&days={{ d }}&min_step_w={{ min_step_w }}">Last {{ d }} days</a>
+  {% endfor %}
+  <a class="pill" href="/discover?days={{ days }}&circuit={{ circuit }}&min_step_w={{ min_step_w }}">← Back to circuit</a>
+</section>
+
+{% if detail.cluster %}
+<section class="tiles">
+  <div class="tile t-blue">
+    <div class="label">● Amplitude</div>
+    <div class="value">{{ detail.amplitude_bin_w }}<span class="unit">W</span></div>
+    <div class="sub">{% if detail.duration_label %}{{ detail.duration_label }} duration · {% endif %}avg {{ '%.0f'|format(detail.cluster.avg_amplitude_w) }} W, peak {{ '%.0f'|format(detail.cluster.peak_amplitude_w) }} W</div>
+  </div>
+  <div class="tile t-violet">
+    <div class="label">◆ Events</div>
+    <div class="value">{{ detail.events|length }}</div>
+    <div class="sub">median {{ '%.1f'|format(detail.cluster.median_duration_min) }} min each</div>
+  </div>
+  <div class="tile t-yellow">
+    <div class="label">★ Total energy</div>
+    <div class="value">{{ '%.2f'|format(detail.cluster.total_kwh) }}<span class="unit">kWh</span></div>
+    <div class="sub">{{ '%.0f'|format(detail.cluster.total_min) }} min total active</div>
+  </div>
+  {% if rates %}
+  <div class="tile t-magenta">
+    <div class="label">▲ Cost @ the flat rate</div>
+    <div class="value">${{ '%.2f'|format(detail.cluster.total_kwh * rates.all_in_per_kwh) }}</div>
+    <div class="sub">over last {{ days }} days</div>
+  </div>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>{{ detail.space_name }} — {{ detail.amplitude_bin_w }} W cluster {% if detail.duration_label %}({{ detail.duration_label }}){% endif %}</h2>
+  <p style="font-size: 0.85rem; color: var(--muted); margin: 0 0 0.75rem;">
+    Hypothesis: <em>{{ detail.cluster.hypothesis }}</em>
+  </p>
+
+  <h3>Hour-of-day distribution</h3>
+  <table class="rank" style="font-family: var(--mono); font-size: 0.8rem;">
+    <thead><tr>
+      {% for h in range(24) %}<th class="num">{{ '%02d'|format(h) }}</th>{% endfor %}
+    </tr></thead>
+    <tbody><tr>
+      {% set mx = detail.hour_dist|max %}
+      {% for h in detail.hour_dist %}
+      <td class="num">{% if mx > 0 %}<span title="{{ h }} events">{{ h }}</span>{% else %}—{% endif %}</td>
+      {% endfor %}
+    </tr></tbody>
+  </table>
+
+  <h3 style="margin-top: 1rem;">Day-of-week distribution</h3>
+  <table class="rank" style="font-family: var(--mono); font-size: 0.85rem;">
+    <thead><tr>
+      {% for d in ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] %}<th class="num">{{ d }}</th>{% endfor %}
+    </tr></thead>
+    <tbody><tr>
+      {% for v in detail.dow_dist %}<td class="num">{{ v }}</td>{% endfor %}
+    </tr></tbody>
+  </table>
+
+  {% if detail.daily_kwh %}
+  <h3 style="margin-top: 1rem;">Daily kWh trend</h3>
+  <table class="rank">
+    <thead><tr><th>Date</th><th class="num">kWh</th></tr></thead>
+    <tbody>
+      {% for d in detail.daily_kwh | reverse %}
+      <tr><td>{{ d.date }}</td><td class="num">{{ '%.3f'|format(d.kwh) }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <h3 style="margin-top: 1rem;">Every event in this cluster ({{ detail.events|length }})</h3>
+  <table class="rank">
+    <thead><tr>
+      <th>#</th><th>Date</th><th>Start</th><th>End</th>
+      <th class="num">Duration</th><th class="num">Avg W</th><th class="num">Peak W</th><th class="num">kWh</th>
+    </tr></thead>
+    <tbody>
+      {% for e in detail.events[:500] %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td>{{ e.date }}</td>
+        <td>{{ e.start[11:19] }}</td>
+        <td>{{ e.end[11:19] }}</td>
+        <td class="num">{% if e.duration_min < 1 %}{{ e.duration_s }} s{% elif e.duration_min < 60 %}{{ '%.1f'|format(e.duration_min) }} min{% else %}{{ '%.1f'|format(e.duration_min/60) }} hr{% endif %}</td>
+        <td class="num">{{ '%.0f'|format(e.avg_w) }}</td>
+        <td class="num">{{ '%.0f'|format(e.peak_w) }}</td>
+        <td class="num">{{ '%.3f'|format(e.kwh) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if detail.events|length > 500 %}
+  <p class="muted" style="font-size: 0.8rem;">Showing latest 500 of {{ detail.events|length }} events.</p>
+  {% endif %}
+</section>
+{% else %}
+<section class="panel">
+  <h2>Cluster not found</h2>
+  <p style="color: var(--muted);">
+    No cluster matched circuit <code>{{ circuit }}</code> + amplitude
+    <code>{{ amplitude }} W</code>{% if duration %} + duration label <code>{{ duration }}</code>{% endif %}
+    in the last {{ days }} day(s). The cluster boundaries may have shifted —
+    return to the <a href="/discover?days={{ days }}&circuit={{ circuit }}">circuit's discover page</a>
+    to pick a current cluster.
+  </p>
+</section>
+{% endif %}
+{% endblock %}

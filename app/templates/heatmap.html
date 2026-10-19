@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+
+{% block title %}Calendar heatmap — span-viewer{% endblock %}
+
+{% block content %}
+<section class="controls">
+  <form method="get" action="/heatmap">
+    <label for="circuit">Circuit</label>
+    <input type="hidden" name="year" value="{{ selected_year }}">
+    <input type="hidden" name="scale" value="{{ scale }}">
+    <select id="circuit" name="circuit" onchange="this.form.submit()">
+      {% for c in circuits %}
+        {% set cid = c.id if c.id is defined else c.space_id %}
+        <option value="{{ cid }}" {% if cid == selected_circuit %}selected{% endif %}>
+          {{ c.name }}{% if c.total_kwh %} — {{ '%.0f'|format(c.total_kwh) }} kWh total{% endif %}
+        </option>
+      {% endfor %}
+    </select>
+  </form>
+</section>
+
+<section class="pickers" style="display:flex; gap:0.6rem; align-items:center; flex-wrap:wrap;">
+  <span style="color:var(--muted); font-size:0.85rem">Scale:</span>
+  <a class="pill {% if scale == 'daily' %}active{% endif %}"
+     href="/heatmap?scale=daily&year={{ selected_year }}&circuit={{ selected_circuit }}">By day</a>
+  <a class="pill {% if scale == 'monthly' %}active{% endif %}"
+     href="/heatmap?scale=monthly&circuit={{ selected_circuit }}">By month (full history)</a>
+
+  {% if scale == 'daily' %}
+    <span style="border-left:1px solid var(--border, #334155); margin: 0 0.4rem; align-self:stretch;"></span>
+    {% for y in years %}
+      <a class="pill {% if y == selected_year %}active{% endif %}"
+         href="/heatmap?year={{ y }}&circuit={{ selected_circuit }}&scale=daily">{{ y }}</a>
+    {% endfor %}
+  {% endif %}
+</section>
+
+<section class="panel">
+  {% if scale == 'daily' %}
+    <h2>Daily kWh — {{ selected_year }}</h2>
+    <div id="heatmap" style="width: 100%; height: 240px;"></div>
+    <p style="font-size: 0.8rem; color: var(--muted); margin: 0.5rem 0 0;">
+      ■ blue (low) → ▲ yellow → ● magenta (high). Cells with no data are blank.
+      SPAN exposes 10-min resolution for the last ~30 days, hourly back ~12 weeks,
+      and daily before that — earlier in the year you'll see daily aggregates.
+    </p>
+  {% else %}
+    <h2>Monthly kWh — full history</h2>
+    <div id="heatmap-monthly" style="width: 100%; height: 480px;"></div>
+    <p style="font-size: 0.8rem; color: var(--muted); margin: 0.5rem 0 0;">
+      ■ blue (low) → ▲ yellow → ● magenta (high). From the panel's own history, back to the
+      month SPAN's cloud starts. Click a cell to drill into that year's daily view.
+    </p>
+  {% endif %}
+</section>
+
+<script type="application/json" id="heatmap-data">{{ days_json | safe }}</script>
+<script type="application/json" id="heatmap-monthly-data">{{ months_json | safe }}</script>
+<script>
+  const HEATMAP_SCALE = {{ scale | tojson }};
+  const SELECTED_CIRCUIT = {{ selected_circuit | tojson }};
+
+  // CB-safe sequential ramp — blue → yellow → magenta. Monotonic in lightness,
+  // works in grayscale, no red-green confusion. Used by both modes.
+  const HEAT_COLORS = ['#1e3a8a', '#3b82f6', '#facc15', '#f59e0b', '#ec4899'];
+
+  function renderDaily() {
+    const rows = JSON.parse(document.getElementById('heatmap-data').textContent);
+    if (typeof echarts === 'undefined') return;
+
+    const vals = rows.map(r => r.kwh).filter(v => v > 0);
+    const lo = vals.length ? Math.min(...vals) : 0;
+    const hi = vals.length ? Math.max(...vals) : 1;
+    const data = rows.map(r => [r.date, +r.kwh.toFixed(2)]);
+
+    const chart = echarts.init(document.getElementById('heatmap'), 'span-dark');
+    chart.setOption({
+      tooltip: {
+        formatter: (p) => `${p.data[0]}<br/><strong>${p.data[1].toFixed(1)} kWh</strong>`,
+      },
+      visualMap: {
+        min: lo, max: hi, calculable: true, orient: 'horizontal',
+        left: 'center', bottom: 0,
+        inRange: { color: HEAT_COLORS },
+      },
+      calendar: {
+        range: {{ selected_year }},
+        left: 50, right: 20, top: 20, bottom: 60,
+        cellSize: ['auto', 14],
+        monthLabel: { nameMap: 'EN' },
+        dayLabel:   { nameMap: 'EN', firstDay: 0 },
+      },
+      series: [{ type: 'heatmap', coordinateSystem: 'calendar', data: data }],
+    });
+    chart.on('click', (p) => {
+      if (!p.data || !p.data[0]) return;
+      window.location.href = `/day?date=${p.data[0]}&circuit=${encodeURIComponent(SELECTED_CIRCUIT)}`;
+    });
+    window.addEventListener('resize', () => chart.resize());
+  }
+
+  function renderMonthly() {
+    const rows = JSON.parse(document.getElementById('heatmap-monthly-data').textContent);
+    if (typeof echarts === 'undefined') return;
+    if (rows.length === 0) {
+      document.getElementById('heatmap-monthly').textContent =
+        'No monthly data for this selection.';
+      return;
+    }
+
+    // Build year × month grid. Rows: years (most recent on top). Cols: Jan-Dec.
+    const years = [...new Set(rows.map(r => r.year))].sort((a, b) => a - b);
+    const monthLabels = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+    const vals = rows.map(r => r.kwh).filter(v => v > 0);
+    const lo = vals.length ? Math.min(...vals) : 0;
+    const hi = vals.length ? Math.max(...vals) : 1;
+
+    // ECharts heatmap data is [xIndex, yIndex, value]. yAxis is rendered with
+    // the array's first item at the BOTTOM, so we reverse `years` so the most
+    // recent year sits on top of the grid.
+    const yLabels = [...years].reverse();
+    const yIdx = new Map(yLabels.map((y, i) => [y, i]));
+    const data = rows
+      .filter(r => r.kwh != null && r.kwh > 0)
+      .map(r => [r.month - 1, yIdx.get(r.year), Math.round(r.kwh)]);
+    const sourceByCell = new Map(
+      rows.map(r => [`${r.month - 1},${yIdx.get(r.year)}`, r.source])
+    );
+
+    const chart = echarts.init(document.getElementById('heatmap-monthly'), 'span-dark');
+    chart.setOption({
+      tooltip: {
+        formatter: (p) => {
+          const [mi, yi, kwh] = p.data;
+          const year = yLabels[yi];
+          const month = monthLabels[mi];
+          const src = sourceByCell.get(`${mi},${yi}`) || '';
+          const srcLabel = src === 'bill' ? '◆ bill'
+                         : src === 'span' ? '● SPAN'
+                         : '';
+          return `${month} ${year}<br/>` +
+                 `<strong>${kwh.toLocaleString()} kWh</strong>` +
+                 (srcLabel ? `<br/><span style="color:#94a3b8;font-size:0.8em">${srcLabel}</span>` : '');
+        },
+      },
+      visualMap: {
+        min: lo, max: hi, calculable: true, orient: 'horizontal',
+        left: 'center', bottom: 4,
+        inRange: { color: HEAT_COLORS },
+      },
+      grid: { left: 56, right: 20, top: 20, bottom: 56 },
+      xAxis: { type: 'category', data: monthLabels, splitArea: { show: true } },
+      yAxis: { type: 'category', data: yLabels.map(String), splitArea: { show: true } },
+      series: [{
+        type: 'heatmap',
+        data: data,
+        label: {
+          show: true, color: '#0b1220', fontSize: 10, fontWeight: 600,
+          formatter: (p) => p.data[2] >= 1000
+            ? `${(p.data[2]/1000).toFixed(1)}k`
+            : `${p.data[2]}`,
+        },
+        emphasis: { itemStyle: { shadowBlur: 6, shadowColor: '#3b82f6' } },
+      }],
+    });
+    chart.on('click', (p) => {
+      if (!p.data) return;
+      const year = yLabels[p.data[1]];
+      // Drill into that year's daily view.
+      window.location.href = `/heatmap?scale=daily&year=${year}&circuit=${encodeURIComponent(SELECTED_CIRCUIT)}`;
+    });
+    window.addEventListener('resize', () => chart.resize());
+  }
+
+  window.addEventListener('load', () => {
+    if (HEATMAP_SCALE === 'monthly') renderMonthly();
+    else renderDaily();
+  });
+</script>
+{% endblock %}

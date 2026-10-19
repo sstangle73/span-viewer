@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+
+{% block title %}Appliances — span-viewer{% endblock %}
+
+{% block content %}
+<section class="pickers">
+  {% for d in [14, 30, 90, 180, 365] %}
+    <a class="pill {% if days == d %}active{% endif %}" href="/appliances?days={{ d }}{% if only %}&only={{ only }}{% endif %}#table">Last {{ d }} days</a>
+  {% endfor %}
+  <span class="pill-sep"></span>
+  <a class="pill {% if not only %}active{% endif %}" href="/appliances?days={{ days }}#table">All</a>
+  {% for p in profiles %}
+    <a class="pill {% if only == p.key %}active{% endif %}" href="/appliances?days={{ days }}&only={{ p.key }}#table">{{ p.glyph }} {{ p.label }}</a>
+  {% endfor %}
+  <a class="pill" href="/export/appliances?days={{ days }}{% if only %}&only={{ only }}{% endif %}&fmt=csv" title="Download as CSV">⇩ CSV</a>
+  <a class="pill" href="/export/appliances?days={{ days }}{% if only %}&only={{ only }}{% endif %}&fmt=json" title="Download as JSON">⇩ JSON</a>
+</section>
+
+<section class="tiles">
+  {% for s in summary %}
+  <div class="tile t-{{ s.color }}">
+    <div class="label">{{ s.glyph }} {{ s.label }}</div>
+    <div class="value">{{ s.count }}<span class="unit">sessions</span></div>
+    <div class="sub">
+      {% if s.count %}
+      {{ '%.1f'|format(s.kwh) }} kWh · {{ '%.1f'|format(s.hours) }} hr · peak {{ '%.1f'|format(s.peak_kw) }} kW
+      {% if s.secondary_label %}
+        <br>
+        {% if s.secondary_count %}
+          ⚠ {{ s.secondary_count }} w/ {{ s.secondary_label }} · {{ '%.1f'|format(s.secondary_kwh) }} kWh ({{ '%.0f'|format(s.secondary_share * 100) }} %)
+        {% else %}
+          no {{ s.secondary_label }} this window
+        {% endif %}
+      {% endif %}
+      {% if s.since_date %}<br><span class="muted">data since {{ s.since_date }}</span>{% endif %}
+      {% else %}
+      none above {{ '%.2f'|format(s.threshold_kw) }} kW threshold
+      {% if s.since_date %}<br><span class="muted">data since {{ s.since_date }}</span>{% endif %}
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</section>
+
+{% if daily_stats %}
+<section class="panel">
+  <h2>{{ (summary | selectattr('key', 'equalto', only) | first).label }} — daily aggregates</h2>
+  <p style="font-size: 0.8rem; color: var(--muted); margin: 0 0 0.75rem;">
+    Cycle-by-cycle table below is exhaustive, but the day-level view is
+    usually what you want. Numbers are over the last {{ daily_stats.days }} day(s) of data{% if daily_stats.since_date %} (since {{ daily_stats.since_date }}){% endif %}.
+  </p>
+  <section class="tiles">
+    <div class="tile t-{{ (summary | selectattr('key', 'equalto', only) | first).color }}">
+      <div class="label">★ Avg daily kWh</div>
+      <div class="value">{{ '%.2f'|format(daily_stats.avg_kwh_day) }}<span class="unit">kWh/day</span></div>
+      <div class="sub">{{ '%.1f'|format(daily_stats.total_kwh) }} kWh over {{ daily_stats.days }} day(s)</div>
+    </div>
+    <div class="tile t-{{ (summary | selectattr('key', 'equalto', only) | first).color }}">
+      <div class="label">● Avg duty cycle</div>
+      <div class="value">{{ '%.0f'|format(daily_stats.avg_duty_pct) }}<span class="unit">%</span></div>
+      <div class="sub">~{{ '%.0f'|format(daily_stats.avg_active_min_day) }} min/day active</div>
+    </div>
+    <div class="tile t-{{ (summary | selectattr('key', 'equalto', only) | first).color }}">
+      <div class="label">◆ Projected monthly</div>
+      <div class="value">{{ '%.0f'|format(daily_stats.avg_kwh_day * 30.4) }}<span class="unit">kWh/mo</span></div>
+      {% if rates %}<div class="sub">≈ ${{ '%.2f'|format(daily_stats.avg_kwh_day * 30.4 * rates.all_in_per_kwh) }}/mo @ {{ '%.4f'|format(rates.all_in_per_kwh) }} $/kWh</div>{% endif %}
+    </div>
+    <div class="tile t-{{ (summary | selectattr('key', 'equalto', only) | first).color }}">
+      <div class="label">▲ Projected yearly</div>
+      <div class="value">{{ '%.0f'|format(daily_stats.avg_kwh_day * 365) }}<span class="unit">kWh/yr</span></div>
+      {% if rates %}<div class="sub">≈ ${{ '%.0f'|format(daily_stats.avg_kwh_day * 365 * rates.all_in_per_kwh) }}/yr</div>{% endif %}
+    </div>
+  </section>
+
+  <h3 style="margin-top: 1rem;">Per-day breakdown</h3>
+  <table class="rank">
+    <thead>
+      <tr>
+        <th>Date</th>
+        <th class="num">kWh</th>
+        <th class="num">Active min/day</th>
+        <th class="num">Duty %</th>
+        <th class="num">Avg kW</th>
+        <th class="num">Peak kW</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for d in daily_stats.daily | reverse %}
+      <tr>
+        <td>{{ d.date }}</td>
+        <td class="num">{{ '%.2f'|format(d.kwh) }}</td>
+        <td class="num">{{ '%.0f'|format(d.active_min) }}</td>
+        <td class="num">{{ '%.0f'|format(d.duty_pct) }}</td>
+        <td class="num">{{ '%.3f'|format(d.avg_kw) }}</td>
+        <td class="num">{{ '%.3f'|format(d.peak_kw) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<section class="panel" id="table">
+  <h2>
+    Sessions
+    {% if only %}
+      — {{ (summary | selectattr('key', 'equalto', only) | first).label }}
+    {% else %}
+      — all appliances
+    {% endif %}
+  </h2>
+  <p style="font-size: 0.8rem; color: var(--muted); margin: 0 0 0.75rem;">
+    A "session" is a contiguous run of 10-min buckets averaging at least the
+    appliance-specific threshold (Dryer ≥ 1.0 kW, Oven ≥ 0.8 kW, Water Heater
+    ≥ 2.0 kW, Microwave ≥ 0.8 kW). Sub-threshold buckets or any longer gap
+    end the session. Click any date to drill into that day's curves.
+    {% if only %}
+    <br><br>
+    <em>{{ (summary | selectattr('key', 'equalto', only) | first).note }}</em>
+    {% endif %}
+  </p>
+
+  {% if sessions %}
+  {% set show_secondary = only and (summary | selectattr('key', 'equalto', only) | first).secondary_label %}
+  <table class="rank">
+    <thead>
+      <tr>
+        <th>#</th>
+        {% if not only %}<th>Appliance</th>{% endif %}
+        <th>Date</th>
+        <th>Start</th>
+        <th>End</th>
+        <th class="num">Duration</th>
+        <th class="num">kWh</th>
+        <th class="num">Avg kW</th>
+        <th class="num">Peak kW</th>
+        {% if show_secondary %}
+        <th class="num">{{ show_secondary | capitalize }} kWh</th>
+        {% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in sessions %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        {% if not only %}
+        <td><span class="chip chip-{{ s.color }}">{{ s.glyph }} {{ s.label }}</span></td>
+        {% endif %}
+        <td><a href="/day?date={{ s.date }}&circuit={{ s.space_id }}">{{ s.date }}</a></td>
+        <td>{{ s.start[11:16] }}</td>
+        <td>{{ s.end[11:16] }}</td>
+        <td class="num">{% if s.duration_min < 60 %}{{ '%.0f'|format(s.duration_min) }} min{% else %}{{ '%.1f'|format(s.duration_min/60) }} hr{% endif %}</td>
+        <td class="num">{{ '%.2f'|format(s.kwh) }}</td>
+        <td class="num">{{ '%.2f'|format(s.avg_kw) }}</td>
+        <td class="num">{{ '%.2f'|format(s.peak_kw) }}</td>
+        {% if show_secondary %}
+        <td class="num">{% if s.secondary_kwh and s.secondary_kwh > 0 %}<strong>{{ '%.2f'|format(s.secondary_kwh) }}</strong>{% else %}<span class="muted">—</span>{% endif %}</td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p style="color: var(--muted);">
+    No sessions found in the last {{ days }} days
+    {% if only %}for {{ (summary | selectattr('key', 'equalto', only) | first).label }}{% endif %}.
+    Try a longer window, or pick a different appliance.
+  </p>
+  {% endif %}
+</section>
+{% endblock %}

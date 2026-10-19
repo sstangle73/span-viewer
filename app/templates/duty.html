@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+
+{% block title %}Duty cycles — span-viewer{% endblock %}
+
+{% block content %}
+<section class="pickers">
+  {% for n in [14, 30, 90, 365] %}
+    <a class="pill {% if days == n %}active{% endif %}" href="/duty?days={{ n }}#chart">Last {{ n }} days</a>
+  {% endfor %}
+</section>
+
+{% if not circuits %}
+<section class="panel">
+  <h2>No duty-cycle circuits configured</h2>
+  <p class="muted">
+    ○ Add circuits that switch on and off on their own (a dehumidifier, a furnace's burner, a
+    sump pump, a fridge) under <code>duty_cycle:</code> in <code>circuits.yaml</code>; see
+    <code>circuits.example.yaml</code>.
+  </p>
+</section>
+{% else %}
+<section class="tiles">
+  {% for c in circuits %}
+  <div class="tile">
+    <div class="label">{{ c.glyph }} {{ c.label }}</div>
+    {% if c.space_id is none %}
+      <div class="value">—</div>
+      <div class="sub">○ no circuit matches this entry</div>
+    {% else %}
+      <div class="value">{{ '%.2f'|format(c.mean_kwh or 0) }}<span class="unit">kWh/day</span></div>
+      <div class="sub">
+        {% if c.mean_hours_on is not none %}{{ '%.1f'|format(c.mean_hours_on) }} h on a day{% else %}hours unknown{% endif %}
+        {% if c.on_w is not none %}· runs at {{ '%.0f'|format(c.on_w) }} W{% else %}· on ≥ {{ '%.0f'|format(c.on_kw * 1000) }} W{% endif %}
+        {% if c.since %}<br><span class="muted">since {{ c.since }}</span>{% endif %}
+        {% if c.key == 'dehumidifier' %}<br><a href="/dehumidifier">▼ month by month</a>{% endif %}
+      </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</section>
+
+<section class="panel" id="chart">
+  <h2>kWh per day</h2>
+  <div id="duty-chart" style="width: 100%; height: 340px;"></div>
+  <p style="font-size: 0.8rem; color: var(--muted); margin: 0.5rem 0 0;">
+    From SPAN's own readings, in 10-minute buckets (SPAN keeps them for about a month). For a
+    circuit with <code>standby_w</code> and <code>on_w</code> set, each bucket's on-time is its
+    energy above standby over the running draw, so a 3-minute firing counts 3 minutes; otherwise a
+    bucket averaging <code>on_kw</code> or more counts as 10 minutes on. A start is a running bucket
+    after an idle one, so two cycles in neighbouring buckets count once. Older days have a daily
+    total only: their minutes come from <code>standby_w</code> and <code>on_w</code> when set, and
+    are blank otherwise.
+  </p>
+</section>
+
+{% for c in circuits %}{% if c.days %}
+<section class="panel">
+  <h2>{{ c.glyph }} {{ c.label }}</h2>
+  <table>
+    <thead>
+      <tr><th>Day</th><th class="num">kWh</th><th class="num">Minutes on</th><th class="num">Starts</th><th>From</th></tr>
+    </thead>
+    <tbody>
+      {% for d in c.days %}
+      <tr>
+        <td><code>{{ d.date }}</code></td>
+        <td class="num">{{ '%.2f'|format(d.kwh) }}</td>
+        <td class="num">{{ '%.0f'|format(d.minutes_on) if d.minutes_on is not none else '—' }}</td>
+        <td class="num">{{ d.starts if d.starts is not none else '—' }}</td>
+        <td class="muted">{{ d.method or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}{% endfor %}
+
+<script type="application/json" id="duty-data">{{ circuits_json | safe }}</script>
+<script>
+  window.addEventListener('load', () => {
+    if (typeof echarts === 'undefined') return;
+    const circuits = JSON.parse(document.getElementById('duty-data').textContent);
+    // Hue-distinct, colour-blind-safe; each series also has its own marker.
+    const colors  = ['#3b82f6', '#f59e0b', '#ec4899', '#facc15', '#8b5cf6', '#38bdf8'];
+    const symbols = ['rect', 'triangle', 'circle', 'diamond', 'pin', 'arrow'];
+    const dates = [...new Set(circuits.flatMap(c => c.days.map(d => d.date)))].sort();
+    const chart = echarts.init(document.getElementById('duty-chart'), 'span-dark');
+    chart.setOption({
+      tooltip: { trigger: 'axis' },
+      legend: { top: 0 },
+      grid: { left: 55, right: 20, top: 40, bottom: 50 },
+      xAxis: { type: 'category', data: dates, axisLabel: { rotate: 30 } },
+      yAxis: { type: 'value', name: 'kWh' },
+      series: circuits.map((c, i) => {
+        const byDate = Object.fromEntries(c.days.map(d => [d.date, +d.kwh.toFixed(2)]));
+        return {
+          name: `${c.glyph} ${c.label}`, type: 'line',
+          symbol: symbols[i % symbols.length], symbolSize: 7,
+          data: dates.map(d => byDate[d] ?? null),
+          itemStyle: { color: colors[i % colors.length] },
+          lineStyle: { color: colors[i % colors.length], type: i % 2 ? 'dashed' : 'solid' },
+        };
+      }),
+    });
+    window.addEventListener('resize', () => chart.resize());
+  });
+</script>
+{% endif %}
+{% endblock %}

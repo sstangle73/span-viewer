@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+
+{% block title %}Anomalies — span-viewer{% endblock %}
+
+{% block content %}
+<section class="pickers">
+  {% for w in [30, 90, 180, 365] %}
+    <a class="pill {% if window == w %}active{% endif %}" href="/anomalies?window={{ w }}&threshold={{ threshold }}#table">Last {{ w }} days</a>
+  {% endfor %}
+</section>
+<section class="pickers" style="margin-top: -0.5rem;">
+  {% for t in [2.0, 3.0, 5.0, 10.0] %}
+    <a class="pill {% if threshold == t %}active{% endif %}" href="/anomalies?window={{ window }}&threshold={{ t }}#table">≥ {{ t }}× baseline</a>
+  {% endfor %}
+</section>
+
+<section class="panel" id="table">
+  <h2>Days a circuit ran ≥ {{ threshold }}× its 7-day average ({{ window }}d window)</h2>
+  <p style="font-size: 0.8rem; color: var(--muted); margin: 0 0 0.75rem;">
+    For each (circuit × day) we compute the 7-day rolling mean of the circuit's daily kWh
+    over the preceding week and flag the day if its consumption beats the baseline by the chosen
+    multiplier: the history a "circuit avg &gt; 5× its 7-day baseline" alert would have raised.
+  </p>
+  {% if not rows %}
+    <p style="color: var(--muted);">No anomalies in this window — every circuit stayed within {{ threshold }}× its 7-day baseline.</p>
+  {% else %}
+  <table class="rank">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Date</th>
+        <th>Circuit</th>
+        <th class="num">kWh that day</th>
+        <th class="num">7-day baseline</th>
+        <th class="num">Ratio</th>
+        <th class="bar"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% set max_ratio = rows[0].ratio if rows else 1 %}
+      {% for r in rows %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td><a href="/day?date={{ r.date }}&circuit={{ r.space_id }}">{{ r.date }}</a></td>
+        <td>{{ r.space_name }}</td>
+        <td class="num">{{ '%.1f'|format(r.kwh) }}</td>
+        <td class="num">{{ '%.2f'|format(r.baseline) }}</td>
+        <td class="num">{{ '%.1f'|format(r.ratio) }}×</td>
+        <td class="bar"><span class="bar-fill" style="width: {{ (r.ratio / max_ratio * 100)|round(1) }}%; background: #ec4899;"></span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+{% endblock %}

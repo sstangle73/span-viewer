@@ -1,0 +1,203 @@
+{% extends "base.html" %}
+
+{% block title %}Load discovery — span-viewer{% endblock %}
+
+{% block content %}
+<section class="pickers">
+  {% for d in [1, 3, 7, 14, 30] %}
+    <a class="pill {% if days == d %}active{% endif %}" href="/discover?days={{ d }}{% if circuit %}&circuit={{ circuit }}{% endif %}&min_step_w={{ min_step_w }}">Last {{ d }} day{% if d > 1 %}s{% endif %}</a>
+  {% endfor %}
+  <span class="pill-sep"></span>
+  {% for w in [100, 200, 400, 800] %}
+    <a class="pill {% if min_step_w == w %}active{% endif %}" href="/discover?days={{ days }}{% if circuit %}&circuit={{ circuit }}{% endif %}&min_step_w={{ w }}" title="Minimum step above baseline to count as a load event">≥ {{ w }} W</a>
+  {% endfor %}
+  {% if circuit %}
+    <a class="pill" href="/discover?days={{ days }}&min_step_w={{ min_step_w }}">← All circuits</a>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Load discovery — what's plugged into each circuit?</h2>
+  <p style="font-size: 0.85rem; color: var(--muted); margin: 0 0 0.75rem;">
+    Reads 3-second per-circuit power from <code>space_live</code> and
+    looks for repeating on/off "events" — moments when a load above
+    {{ min_step_w }} W kicked on, stayed on for at least 15 s, then turned
+    off. Similar-amplitude events are clustered to surface distinct loads
+    hiding on shared circuits.
+    <br><br>
+    Best targets: <strong>window ACs, microwaves, kettles, dishwasher
+    elements, sump pumps</strong> — anything with a distinctive draw on
+    a mixed outlet circuit. Less useful for: fixed appliances on dedicated
+    circuits (already detectable from the 10-min data on /appliances).
+  </p>
+</section>
+
+{% if overview is not none %}
+  <section class="panel">
+    <h2>Overview — all circuits, last {{ days }} day{% if days > 1 %}s{% endif %}</h2>
+    {% set total_samples = overview | sum(attribute='sample_count') %}
+    {% if total_samples == 0 %}
+    <p style="background: rgba(245,158,11,0.1); border: 1px solid #f59e0b; padding: 0.5rem 0.75rem; border-radius: 4px;">
+      <strong>⏳ No data yet</strong> — the <code>space_live</code> hypertable
+      starts empty and fills at ~7 rows/sec across all circuits. Come back in
+      an hour for the first signal; useful clustering needs at least 24 h of
+      data, and rare loads (window ACs in a heat wave, dishwasher cycles)
+      need a week or two.
+    </p>
+    {% endif %}
+    <table class="rank">
+      <thead>
+        <tr>
+          <th>Circuit</th>
+          <th class="num">Samples</th>
+          <th class="num">Baseline W</th>
+          <th class="num">Peak W</th>
+          <th class="num">Events</th>
+          <th class="num">Clusters</th>
+          <th>Top cluster</th>
+          <th class="num">Event kWh</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in overview %}
+        <tr>
+          <td>
+            {% if r.event_count %}<a href="/discover?days={{ days }}&circuit={{ r.space_id }}&min_step_w={{ min_step_w }}">{{ r.space_name }}</a>{% else %}<span class="muted">{{ r.space_name }}</span>{% endif %}
+          </td>
+          <td class="num">{{ '{:,}'.format(r.sample_count or 0) }}</td>
+          <td class="num">{% if r.baseline_w is not none %}{{ '%.0f'|format(r.baseline_w) }}{% else %}—{% endif %}</td>
+          <td class="num">{% if r.peak_w is not none %}{{ '%.0f'|format(r.peak_w) }}{% else %}—{% endif %}</td>
+          <td class="num">{{ r.event_count }}</td>
+          <td class="num">{{ r.cluster_count }}</td>
+          <td>
+            {% if r.top_cluster_w %}
+              <strong>{{ r.top_cluster_w }} W</strong>
+              <br><span style="font-size: 0.75rem; color: var(--muted);">{{ r.top_cluster_hypothesis }}</span>
+            {% else %}<span class="muted">—</span>{% endif %}
+          </td>
+          <td class="num">{{ '%.2f'|format(r.total_event_kwh) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+{% elif detail is not none %}
+  <section class="tiles">
+    <div class="tile t-blue">
+      <div class="label">● Baseline</div>
+      <div class="value">{% if detail.baseline_w is not none %}{{ '%.0f'|format(detail.baseline_w) }}<span class="unit">W</span>{% else %}—{% endif %}</div>
+      <div class="sub">10th percentile — what's always on</div>
+    </div>
+    <div class="tile t-yellow">
+      <div class="label">▲ Peak</div>
+      <div class="value">{% if detail.peak_w is not none %}{{ '%.0f'|format(detail.peak_w) }}<span class="unit">W</span>{% else %}—{% endif %}</div>
+      <div class="sub">max single-sample draw</div>
+    </div>
+    <div class="tile t-violet">
+      <div class="label">◆ Events found</div>
+      <div class="value">{{ detail.events|length }}</div>
+      <div class="sub">≥ {{ '%.0f'|format(detail.min_step_w) }} W above baseline, ≥ 15 s long</div>
+    </div>
+    <div class="tile t-magenta">
+      <div class="label">★ Distinct loads</div>
+      <div class="value">{{ detail.clusters|length }}</div>
+      <div class="sub">amplitude clusters (50 W bins)</div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>{{ detail.space_name }} — discovered loads</h2>
+    <p style="font-size: 0.8rem; color: var(--muted); margin: 0 0 0.75rem;">
+      Events sharing a similar amplitude are likely the same appliance.
+      Hypotheses are heuristic — typical power signatures of household loads;
+      treat as a starting guess, not ground truth.
+    </p>
+    {% if detail.clusters %}
+    <table class="rank">
+      <thead>
+        <tr>
+          <th class="num">Amplitude</th>
+          <th>Dur split</th>
+          <th class="num">Count</th>
+          <th class="num">Median dur</th>
+          <th class="num">Total kWh</th>
+          <th>Peak hour</th>
+          <th>Hour pattern</th>
+          <th>Hypothesis</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in detail.clusters %}
+        <tr>
+          <td class="num"><strong>{{ c.amplitude_bin_w }} W</strong></td>
+          <td>{% if c.duration_label %}<span class="chip chip-{% if c.duration_label == 'short' %}yellow{% else %}violet{% endif %}">{{ c.duration_label }}</span>{% else %}—{% endif %}</td>
+          <td class="num">{{ c.count }}</td>
+          <td class="num">{{ '%.1f'|format(c.median_duration_min) }} min</td>
+          <td class="num">{{ '%.2f'|format(c.total_kwh) }}</td>
+          <td>{% if c.peak_hour is not none %}{{ '%02d'|format(c.peak_hour) }}:00{% else %}—{% endif %}</td>
+          <td><code style="font-size: 0.7rem; letter-spacing: -1px;">{% for h in c.hour_distribution %}{% set ch = '·▁▂▃▄▅▆▇█' %}{% set mx = c.hour_distribution|max %}{% if mx > 0 %}{{ ch[((h * 8) // mx)|int] }}{% else %}·{% endif %}{% endfor %}</code></td>
+          <td><em>{{ c.hypothesis }}</em></td>
+          <td><a class="pill" style="font-size: 0.7rem;" href="/discover/cluster?circuit={{ detail.space_id }}&amplitude={{ c.amplitude_bin_w }}{% if c.duration_label %}&duration={{ c.duration_label }}{% endif %}&days=30">history →</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p style="font-size: 0.75rem; color: var(--muted); margin-top: 0.5rem;">
+      <strong>Hour pattern:</strong> hour 0 → 23 (local time) with bar height
+      proportional to event count. <strong>Dur split:</strong> short/long when
+      durations were clearly bimodal (microwave vs air fryer pattern).
+      Click "history →" to drill into a single cluster's full timeline.
+    </p>
+    {% else %}
+    <p style="color: var(--muted);">
+      No events found above {{ '%.0f'|format(detail.min_step_w) }} W in the last
+      {{ detail.window_days }} day(s). Try a smaller step threshold, or wait
+      for more data ({{ '{:,}'.format(detail.sample_count) }} samples seen so far).
+    </p>
+    {% endif %}
+  </section>
+
+  {% if detail.events %}
+  <section class="panel">
+    <h2>Raw event list ({{ detail.events|length }})</h2>
+    <p style="font-size: 0.8rem; color: var(--muted); margin: 0 0 0.75rem;">
+      Most-recent first. Each row = one load cycle (on → off).
+    </p>
+    <table class="rank">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Date</th>
+          <th>Start</th>
+          <th>End</th>
+          <th class="num">Duration</th>
+          <th class="num">Avg W</th>
+          <th class="num">Peak W</th>
+          <th class="num">Step W</th>
+          <th class="num">kWh</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in detail.events[:500] %}
+        <tr>
+          <td>{{ loop.index }}</td>
+          <td>{{ e.date }}</td>
+          <td>{{ e.start[11:19] }}</td>
+          <td>{{ e.end[11:19] }}</td>
+          <td class="num">{% if e.duration_min < 1 %}{{ e.duration_s }} s{% elif e.duration_min < 60 %}{{ '%.1f'|format(e.duration_min) }} min{% else %}{{ '%.1f'|format(e.duration_min/60) }} hr{% endif %}</td>
+          <td class="num">{{ '%.0f'|format(e.avg_w) }}</td>
+          <td class="num">{{ '%.0f'|format(e.peak_w) }}</td>
+          <td class="num">{{ '%.0f'|format(e.step_w) }}</td>
+          <td class="num">{{ '%.3f'|format(e.kwh) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if detail.events|length > 500 %}
+    <p class="muted" style="font-size: 0.8rem;">Showing latest 500 of {{ detail.events|length }} events.</p>
+    {% endif %}
+  </section>
+  {% endif %}
+{% endif %}
+{% endblock %}

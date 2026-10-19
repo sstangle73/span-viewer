@@ -1,0 +1,39 @@
+{# DB vs VictoriaMetrics (optional, VM_URL), per local day: loaded into /health by HTMX. #}
+{% if check.enabled is defined and not check.enabled %}
+  <p class="muted">○ Off: set <code>VM_URL</code> to compare with a VictoriaMetrics that records the panel's power.</p>
+{% elif check.error %}
+  <p class="muted">◆ Couldn't reach {{ check.error }}</p>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>Day</th>
+      <th class="num">Live buckets</th>
+      <th class="num">Missing in DB</th>
+      <th class="num">Solar DB / VM kWh</th>
+      <th class="num">Δ</th>
+      <th class="num">Load DB / VM kWh</th>
+      <th class="num">Δ</th>
+      <th>Verdict</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for d in check.days %}
+    <tr>
+      <td>{{ d.date.strftime('%a %m-%d') }}</td>
+      <td class="num">{{ d.live_buckets }} / {{ d.buckets }}</td>
+      <td class="num">{{ d.missing_in_db or '—' }}</td>
+      <td class="num">{{ '%.1f'|format(d.db_solar) }} / {{ '%.1f'|format(d.vm_solar) }}</td>
+      <td class="num">{{ '%+.1f %%'|format(d.solar_pct) if d.solar_pct is not none else '—' }}</td>
+      <td class="num">{{ '%.1f'|format(d.db_load) }} / {{ '%.1f'|format(d.vm_load) }}</td>
+      <td class="num">{{ '%+.1f %%'|format(d.load_pct) if d.load_pct is not none else '—' }}</td>
+      <td>
+        {% if d.flagged %}<span style="color: #ec4899">◆ off by more than {{ check.flag_pct|int }} %</span>
+        {% else %}<span style="color: #3b82f6">● agrees</span>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p class="muted">Only 10-minute buckets where VictoriaMetrics was live ({{ check.min_changes }}+ of 20 samples changing) count: while the panel is unreachable VM repeats its last value. Today's last bucket may still be arriving from SPAN's cloud. JSON at <a href="/api/v1/health/vm-check">/api/v1/health/vm-check</a>.</p>
+{% endif %}
