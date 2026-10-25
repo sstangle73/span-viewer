@@ -1,9 +1,12 @@
 # Lint, then the smoke test: a TimescaleDB service, the schema, the synthetic
 # house from scripts/sample_data.py, and every page and API endpoint.
+# Python comes from ECR Public's copy of the Docker Official Images (the same
+# names, tags and digests as Docker Hub's), outside Docker Hub's anonymous
+# pull limit.
 stages: [lint, test]
 
 default:
-  image: python:3.13-slim
+  image: public.ecr.aws/docker/library/python:3.13-slim
   interruptible: true
 
 variables:
@@ -18,6 +21,7 @@ lint:
 test:
   stage: test
   services:
+    # Timescale publishes its images on Docker Hub only.
     - name: timescale/timescaledb:2.17.2-pg17
       alias: db
   variables:
