@@ -21,8 +21,11 @@ lint:
 test:
   stage: test
   services:
-    # Timescale publishes its images on Docker Hub only.
-    - name: timescale/timescaledb:2.17.2-pg17
+    # Timescale publishes its images on Docker Hub only. The tag follows the
+    # release scripts/install-timescaledb.sh installs (its unpinned
+    # timescaledb-2-postgresql-17), so the schema is tested on what a fresh
+    # install gets.
+    - name: timescale/timescaledb:2.31.0-pg17
       alias: db
   variables:
     POSTGRES_USER: span_app
