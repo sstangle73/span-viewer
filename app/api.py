@@ -70,6 +70,7 @@ async def api_index():
             {'path': '/api/v1/circuits/{id}/yoy',     'desc': 'Year-over-year monthly kWh for the given circuit'},
             {'path': '/api/v1/circuits/{id}/daily',   'desc': 'Daily kWh for a calendar year; ?year=YYYY'},
             {'path': '/api/v1/circuits/{id}/day',     'desc': 'Single-day curve; ?date=YYYY-MM-DD'},
+            {'path': '/api/v1/pace',                  'desc': 'This month so far against the same days last year, with a projected finish'},
             # Top-K
             {'path': '/api/v1/top',                   'desc': 'Top-consumer ranking; ?window=30d|90d|12mo|all'},
             {'path': '/api/v1/top-days',              'desc': 'Biggest consumption days; ?window&circuit&limit'},
@@ -128,6 +129,11 @@ async def v1_circuit_yoy(circuit_id: str):
         return JSONResponse(_jsonable(q.yoy_monthly(circuit_id)))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get('/pace')
+async def v1_pace():
+    return JSONResponse(_jsonable(q.month_pace()))
 
 
 @router.get('/circuits/{circuit_id}/daily')

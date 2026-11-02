@@ -1,6 +1,7 @@
 """SQL queries the UI needs. Kept as plain functions so they're easy to
 test independently of the FastAPI routes."""
 
+import calendar
 import datetime
 from zoneinfo import ZoneInfo
 
@@ -270,6 +271,118 @@ def top_consumers(window: str = '30d') -> list[dict]:
         {'name': r['name'], 'kwh': r['kwh'], 'share': r['kwh'] / total}
         for r in rows
     ]
+
+
+def pace_windows(today: datetime.date) -> dict:
+    """The days month_pace() compares, complete local days only: this month
+    through yesterday, against the same dates a year earlier. On the 1st there
+    are no complete days yet, so it's last month, finished. A leap month's 29th
+    has no twin, so last year's window then stops at the 28th."""
+    through = today - datetime.timedelta(days=1)
+    start = through.replace(day=1)
+    days_in_month = calendar.monthrange(start.year, start.month)[1]
+    last_start = start.replace(year=start.year - 1)
+    last_days_in_month = calendar.monthrange(last_start.year, last_start.month)[1]
+    last_through = last_start.replace(day=min(through.day, last_days_in_month))
+    return {
+        'start': start,
+        'through': through,
+        'days_done': through.day,
+        'days_in_month': days_in_month,
+        'finished': through.day == days_in_month,
+        'last_start': last_start,
+        'last_through': last_through,
+        'last_days': last_through.day,
+        'last_days_in_month': last_days_in_month,
+        'last_month_end': last_start.replace(day=last_days_in_month),
+    }
+
+
+def pace_row(now_kwh: float, last_kwh: float, last_full_kwh: float, w: dict,
+             now_days: int, last_days: int, last_full_days: int) -> dict:
+    """One line of the pace table from its window totals. `now_days`,
+    `last_days` and `last_full_days` are how many days of each window have
+    data. A window with days missing gives no last-year figure: part of a
+    month isn't a fair comparison. The projection is this month's daily average
+    over the whole month, so missing days don't pull it down."""
+    last_ok = last_days >= w['last_days']
+    return {
+        'now_kwh': now_kwh,
+        'last_kwh': last_kwh if last_ok else None,
+        'last_full_kwh': last_full_kwh if last_full_days >= w['last_days_in_month'] else None,
+        'projected_kwh': now_kwh / now_days * w['days_in_month'] if now_days else None,
+        'change': (now_kwh - last_kwh) / last_kwh if last_ok and last_kwh > 0 else None,
+        'is_new': last_ok and last_kwh <= 0 and now_kwh > 0,
+    }
+
+
+def month_pace(today: datetime.date | None = None) -> dict:
+    """This month so far against the same days last year, whole house first
+    and then every circuit with energy in either window, biggest first.
+
+    The window's fields come from pace_windows(), each row's from pace_row(),
+    plus `now_days` and `last_days_seen`: the days of each window with panel
+    data."""
+    w = pace_windows(today or today_local())
+    params = {
+        'start': w['start'], 'end': w['through'] + datetime.timedelta(days=1),
+        'last_start': w['last_start'], 'last_end': w['last_through'] + datetime.timedelta(days=1),
+        'last_month_end': w['last_month_end'] + datetime.timedelta(days=1),
+    }
+    now = 'd >= %(start)s AND d < %(end)s'
+    last = 'd >= %(last_start)s AND d < %(last_end)s'
+    last_full = 'd >= %(last_start)s AND d < %(last_month_end)s'
+    span = (f"ts >= %(last_start)s::timestamp AT TIME ZONE '{TZ}' "
+            f"AND ts < %(end)s::timestamp AT TIME ZONE '{TZ}'")
+    with pool().connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        # A day only counts as data once it has energy on it: backfill leaves
+        # all-zero stub rows.
+        cur.execute(
+            f"""
+            SELECT COUNT(*) FILTER (WHERE {now})::int       AS now_days,
+                   COUNT(*) FILTER (WHERE {last})::int      AS last_days,
+                   COUNT(*) FILTER (WHERE {last_full})::int AS last_full_days,
+                   COALESCE(SUM(kwh) FILTER (WHERE {now}), 0)::float       AS now_kwh,
+                   COALESCE(SUM(kwh) FILTER (WHERE {last}), 0)::float      AS last_kwh,
+                   COALESCE(SUM(kwh) FILTER (WHERE {last_full}), 0)::float AS last_full_kwh
+            FROM (
+                SELECT (ts AT TIME ZONE '{TZ}')::date AS d, SUM(energy_kwh) AS kwh
+                FROM panel_readings
+                WHERE metric = 'building_total' AND {span}
+                GROUP BY 1 HAVING SUM(energy_kwh) > 0
+            ) days;
+            """,
+            params,
+        )
+        house = cur.fetchone()
+        cur.execute(
+            f"""
+            SELECT s.space_id, s.name,
+                   COALESCE(SUM(r.energy_kwh) FILTER (WHERE {now}), 0)::float       AS now_kwh,
+                   COALESCE(SUM(r.energy_kwh) FILTER (WHERE {last}), 0)::float      AS last_kwh,
+                   COALESCE(SUM(r.energy_kwh) FILTER (WHERE {last_full}), 0)::float AS last_full_kwh
+            FROM (
+                SELECT space_id, energy_kwh, (ts AT TIME ZONE '{TZ}')::date AS d
+                FROM space_readings WHERE {span}
+            ) r JOIN spaces s USING (space_id)
+            GROUP BY 1, 2 ORDER BY now_kwh DESC, s.name;
+            """,
+            params,
+        )
+        circuits = cur.fetchall()
+
+    days = (house['now_days'], house['last_days'], house['last_full_days'])
+    rows = [{
+        'circuit_id': WHOLE_HOUSE, 'name': 'Whole house',
+        **pace_row(house['now_kwh'], house['last_kwh'], house['last_full_kwh'], w, *days),
+    }]
+    for c in circuits:
+        if c['now_kwh'] > 0 or c['last_kwh'] > 0:
+            rows.append({
+                'circuit_id': c['space_id'], 'name': c['name'],
+                **pace_row(c['now_kwh'], c['last_kwh'], c['last_full_kwh'], w, *days),
+            })
+    return {**w, 'now_days': house['now_days'], 'last_days_seen': house['last_days'], 'rows': rows}
 
 
 def daily_kwh_for_year(year: int, circuit_id: str = WHOLE_HOUSE) -> list[dict]:

@@ -22,6 +22,7 @@ from .queries import (
     list_circuits,
     live_history,
     load_24h_ago_w,
+    month_pace,
     yoy_monthly,
     ingest_health,
     top_consumers,
@@ -105,6 +106,7 @@ NAV = (
     ('Usage', (
         ('/live',    'Live'),
         ('/yoy',     'YoY'),
+        ('/pace',    'Month pace'),
         ('/top',     'Top consumers'),
         ('/heatmap', 'Heatmap'),
         ('/hours',   'Hour pattern'),
@@ -266,6 +268,17 @@ async def yoy_chart_fragment(request: Request, circuit: str = WHOLE_HOUSE):
         request=request,
         name='yoy_chart.html',
         context=_yoy_payload(circuit),
+    )
+
+
+# ---- Month pace ------------------------------------------------------------
+
+@app.get('/pace', response_class=HTMLResponse)
+async def pace_page(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name='pace.html',
+        context={**_common_ctx('/pace'), **month_pace()},
     )
 
 
