@@ -14,6 +14,7 @@ Everything it shows comes from your panel's own data. It pulls the history from 
 |---|---|
 | `/live` | Real-time power (3-second refresh): solar, grid, house load, phase balance, each circuit ranked, a strip chart that survives a reload |
 | `/yoy` | Monthly kWh year over year, whole house or any circuit |
+| `/pace` | This month so far against the same days last year, per circuit, with a projected finish |
 | `/top`, `/biggest`, `/hours`, `/day`, `/heatmap` | Top consumers, biggest days, hour-of-day patterns, a single day's curves for every circuit, calendar heatmaps |
 | `/solar`, `/flows` | Production, self-consumption, where each kWh came from and went, capacity factor, a year-end projection, a Sankey of the flows |
 | `/sessions`, `/appliances`, `/duty` | EV charging sessions, sessions of the appliances you name in `circuits.yaml`, and kWh, minutes on and starts per day for circuits that cycle (a furnace, a dehumidifier, a sump pump) |

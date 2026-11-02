@@ -21,7 +21,7 @@ PAGES = sorted({path for _, items in NAV for path, _ in items} | {
 
 API = [
     '/api/v1', '/api/v1/live', '/api/v1/live/history?window=1h', '/api/v1/circuits',
-    '/api/v1/panel/daily', '/api/v1/circuits/whole_house/yoy',
+    '/api/v1/panel/daily', '/api/v1/circuits/whole_house/yoy', '/api/v1/pace',
     '/api/v1/top?window=30d', '/api/v1/top-days', '/api/v1/solar/overview',
     '/api/v1/solar/monthly', '/api/v1/solar/year-end', '/api/v1/sessions',
     '/api/v1/anomalies', '/api/v1/alerts', '/api/v1/duty-cycle', '/api/v1/house/dehumidifier',

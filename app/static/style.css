@@ -390,6 +390,13 @@ html { scroll-behavior: smooth; }
   padding-top: 0.5rem;
 }
 
+/* Month pace: the change column carries its own ▲ ▼ ● and a word. */
+.pace-note { color: var(--muted); margin: 0 0 0.75rem; }
+.pace-note strong { color: var(--warn); font-weight: 600; }
+.pace-house td { font-weight: 600; }
+.pace-up { color: var(--warn); white-space: nowrap; }
+.pace-down { color: var(--accent); white-space: nowrap; }
+
 /* Top-consumers ranked table */
 .rank {
   width: 100%;

@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block title %}Month pace — span-viewer{% endblock %}
+
+{% macro days(first, last) -%}
+  {{ first.strftime('%b') }} {{ first.day }}{% if last.day != first.day %}–{{ last.day }}{% endif %}
+{%- endmacro %}
+
+{% macro kwh(v) -%}
+  {% if v is none %}—{% else %}{{ '%.1f'|format(v) if v < 100 else '%.0f'|format(v) }}{% endif %}
+{%- endmacro %}
+
+{% block content %}
+<section class="panel">
+  <h2>
+    {{ start.strftime('%B %Y') }}{% if finished %}, finished{% else %}, through {{ through.strftime('%b') }} {{ through.day }}{% endif %}
+  </h2>
+  <p class="pace-note">
+    Complete days only, so today isn't counted.
+    {% if not finished %}Projected finish is this month's daily average so far, carried across all {{ days_in_month }} days. It doesn't know the weather, so it's a pace, not a forecast.{% endif %}
+  </p>
+  {% if now_days < days_done %}
+  <p class="pace-note"><strong>▲ {{ days_done - now_days }} of these {{ days_done }} days have no data.</strong> Totals are short by those days, and the projection leaves them out of its average.</p>
+  {% endif %}
+  {% if last_days_seen < last_days %}
+  <p class="pace-note"><strong>▲ Last year has data for only {{ last_days_seen }} of the {{ last_days }} days to compare,</strong> so there's no change to show.</p>
+  {% endif %}
+  <table class="rank">
+    <thead>
+      <tr>
+        <th>Circuit</th>
+        <th class="num">{{ days(start, through) }} kWh</th>
+        <th class="num">Same days {{ last_start.year }}</th>
+        <th class="num">Change</th>
+        <th class="num">{{ 'Finished at' if finished else 'Projected finish' }}</th>
+        <th class="num">{{ last_start.strftime('%b %Y') }} whole month</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr{% if loop.first %} class="pace-house"{% endif %}>
+        <td><a href="/yoy?circuit={{ r.circuit_id }}">{{ r.name }}</a></td>
+        <td class="num">{{ kwh(r.now_kwh) }}</td>
+        <td class="num">{{ kwh(r.last_kwh) }}</td>
+        <td class="num">
+          {%- if r.is_new %}new
+          {%- elif r.change is none %}—
+          {%- elif r.change >= 0.02 %}<span class="pace-up">▲ {{ '%.0f%%'|format(r.change * 100) }} more</span>
+          {%- elif r.change <= -0.02 %}<span class="pace-down">▼ {{ '%.0f%%'|format(-r.change * 100) }} less</span>
+          {%- else %}● about the same
+          {%- endif %}
+        </td>
+        <td class="num">{{ kwh(r.projected_kwh) }}</td>
+        <td class="num">{{ kwh(r.last_full_kwh) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
